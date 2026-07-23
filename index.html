@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#eef3f8">
+  <title>Geo Tag Camera</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <button class="theme-toggle" type="button" id="themeToggle" aria-label="Switch to dark mode" title="Switch theme">
+    <span id="themeToggleIcon">D</span>
+  </button>
+
+  <main class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Geo Tag Camera</p>
+        <h1>SreeGeo</h1>
+      </div>
+      <div class="status-pill" id="databaseStatus">Local mode</div>
+    </header>
+
+    <nav class="tab-bar" aria-label="Main app features">
+      <button class="tab-button active" type="button" data-view="cameraView" aria-pressed="true">
+        <span>Camera</span>
+      </button>
+      <button class="tab-button" type="button" data-view="galleryView" aria-pressed="false">
+        <span>Gallery</span>
+      </button>
+    </nav>
+
+    <section class="view active" id="cameraView" aria-labelledby="cameraTitle">
+      <div class="camera-panel">
+        <div class="video-wrap">
+          <video id="cameraFeed" autoplay playsinline muted></video>
+          <canvas id="photoCanvas" hidden></canvas>
+          <div class="empty-camera" id="cameraEmpty">
+            <strong>Camera preview</strong>
+            <span>Allow camera and location permission to begin.</span>
+          </div>
+        </div>
+
+        <div class="location-card">
+          <h2 id="cameraTitle">Current Geo Tag</h2>
+          <p id="locationText">Location not captured yet.</p>
+          <a id="mapLink" href="#" target="_blank" rel="noreferrer" hidden>Open map</a>
+          <form class="manual-location" id="manualLocationForm">
+            <label>
+              <span>Latitude</span>
+              <input type="number" id="manualLatitude" inputmode="decimal" step="any" min="-90" max="90" placeholder="11.0168">
+            </label>
+            <label>
+              <span>Longitude</span>
+              <input type="number" id="manualLongitude" inputmode="decimal" step="any" min="-180" max="180" placeholder="76.9558">
+            </label>
+            <button class="ghost-button compact" type="submit">Apply Location</button>
+          </form>
+        </div>
+
+        <div class="actions">
+          <button class="primary-button" type="button" id="startCameraBtn">Start Camera</button>
+          <button class="ghost-button" type="button" id="switchCameraBtn" disabled>Switch Front/Back</button>
+          <button class="capture-button" type="button" id="captureBtn" disabled>Capture</button>
+          <button class="ghost-button" type="button" id="refreshLocationBtn">Refresh GPS</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="galleryView" aria-labelledby="galleryTitle">
+      <div class="gallery-head">
+        <div>
+          <h2 id="galleryTitle">Gallery</h2>
+          <p>Your captured photos with latitude, longitude, time, and map links.</p>
+        </div>
+        <button class="ghost-button compact" type="button" id="refreshGalleryBtn">Refresh</button>
+      </div>
+
+      <div class="gallery-grid" id="galleryGrid"></div>
+      <p class="empty-gallery" id="emptyGallery">No photos yet. Open Camera and capture your first geo tagged photo.</p>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
