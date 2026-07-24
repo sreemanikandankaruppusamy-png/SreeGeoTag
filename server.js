@@ -3,6 +3,14 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const express = require("express");
 const { MongoClient, ObjectId } = require("mongodb");
+const {
+  hashPassword,
+  verifyPassword,
+  createSessionToken,
+  createSessionCookie,
+  clearSessionCookie,
+  getSessionToken
+} = require("./auth");
 require("dotenv").config();
 
 const app = express();
@@ -17,6 +25,13 @@ if (!mongoUri) {
 
 const client = mongoUri ? new MongoClient(mongoUri, { serverSelectionTimeoutMS: 5000 }) : null;
 let photosCollection = null;
+let usersCollection = null;
+let sessions = new Map();
+
+function getCurrentUser(request) {
+  const token = getSessionToken(request.headers.cookie || "");
+  return token ? sessions.get(token) : null;
+}
 
 app.use(express.json({ limit: "15mb" }));
 app.use((request, response, next) => {
@@ -31,6 +46,30 @@ app.use((request, response, next) => {
 
   next();
 });
+function sendLoginPage(request, response) {
+  if (getCurrentUser(request)) {
+    response.redirect("/main.html");
+    return;
+  }
+
+  response.sendFile(path.join(__dirname, "index.html"));
+}
+
+function sendMainPage(request, response) {
+  if (!getCurrentUser(request)) {
+    response.redirect("/");
+    return;
+  }
+
+  response.sendFile(path.join(__dirname, "main.html"));
+}
+
+app.get("/", sendLoginPage);
+app.get("/login", sendLoginPage);
+app.get("/index.html", sendLoginPage);
+app.get("/main", sendMainPage);
+app.get("/main.html", sendMainPage);
+
 app.use("/uploads", express.static(uploadDir));
 app.use(express.static(__dirname));
 
@@ -38,7 +77,121 @@ app.get("/api/health", (request, response) => {
   response.json({ ok: true, database: Boolean(photosCollection) });
 });
 
+app.get("/api/auth/me", async (request, response) => {
+  const token = getSessionToken(request.headers.cookie || "");
+
+  if (!token || !sessions.has(token)) {
+    response.status(401).json({ authenticated: false });
+    return;
+  }
+
+  response.json({ authenticated: true, user: sessions.get(token) });
+});
+
+app.post("/api/auth/register", async (request, response) => {
+  if (!usersCollection) {
+    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+    return;
+  }
+
+  const { name, email, password } = request.body || {};
+
+  if (!name || !email || !password) {
+    response.status(400).json({ message: "Name, email, and password are required." });
+    return;
+  }
+
+  try {
+    const existingUser = await usersCollection.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      response.status(409).json({ message: "An account with that email already exists." });
+      return;
+    }
+
+    const passwordHash = await hashPassword(password);
+    const createdUser = await usersCollection.insertOne({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      passwordHash,
+      createdAt: new Date()
+    });
+
+    const user = {
+      id: String(createdUser.insertedId),
+      name: name.trim(),
+      email: email.toLowerCase().trim()
+    };
+
+    const token = createSessionToken();
+    sessions.set(token, user);
+    response.setHeader("Set-Cookie", createSessionCookie(token));
+    response.status(201).json({ authenticated: true, user });
+  } catch (error) {
+    console.error("User registration failed:", error);
+    response.status(500).json({ message: "Could not create your account." });
+  }
+});
+
+app.post("/api/auth/login", async (request, response) => {
+  if (!usersCollection) {
+    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+    return;
+  }
+
+  const { email, password } = request.body || {};
+
+  if (!email || !password) {
+    response.status(400).json({ message: "Email and password are required." });
+    return;
+  }
+
+  try {
+    const user = await usersCollection.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      response.status(401).json({ message: "Invalid email or password." });
+      return;
+    }
+
+    const isValidPassword = await verifyPassword(password, user.passwordHash);
+    if (!isValidPassword) {
+      response.status(401).json({ message: "Invalid email or password." });
+      return;
+    }
+
+    const safeUser = {
+      id: String(user._id),
+      name: user.name,
+      email: user.email
+    };
+
+    const token = createSessionToken();
+    sessions.set(token, safeUser);
+    response.setHeader("Set-Cookie", createSessionCookie(token));
+    response.json({ authenticated: true, user: safeUser });
+  } catch (error) {
+    console.error("User login failed:", error);
+    response.status(500).json({ message: "Could not sign you in." });
+  }
+});
+
+app.post("/api/auth/logout", (request, response) => {
+  const token = getSessionToken(request.headers.cookie || "");
+
+  if (token) {
+    sessions.delete(token);
+  }
+
+  response.setHeader("Set-Cookie", clearSessionCookie());
+  response.json({ ok: true });
+});
+
 app.get("/api/photos", async (request, response) => {
+  const token = getSessionToken(request.headers.cookie || "");
+  if (!token || !sessions.has(token)) {
+    response.status(401).json({ message: "Please sign in to view your gallery." });
+    return;
+  }
+
   if (!photosCollection) {
     response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
     return;
@@ -46,7 +199,7 @@ app.get("/api/photos", async (request, response) => {
 
   try {
     const photos = await photosCollection
-      .find({}, { projection: { imageFile: 0 } })
+      .find({ ownerId: sessions.get(token).id }, { projection: { imageFile: 0 } })
       .sort({ createdAt: -1 })
       .limit(100)
       .toArray();
@@ -68,7 +221,16 @@ app.post("/api/photos", async (request, response) => {
     const savedImage = await saveImage(photo.imageUrl);
     const createdAt = photo.createdAt ? new Date(photo.createdAt) : new Date();
 
+    const token = getSessionToken(request.headers.cookie || "");
+    const currentUser = token ? sessions.get(token) : null;
+
+    if (!currentUser) {
+      response.status(401).json({ message: "Please sign in before saving photos." });
+      return;
+    }
+
     const document = {
+      ownerId: currentUser.id,
       originalId: photo.id || crypto.randomUUID(),
       imageUrl: savedImage.publicUrl,
       imageFile: savedImage.fileName,
@@ -102,9 +264,21 @@ app.delete("/api/photos/:id", async (request, response) => {
   }
 
   try {
+    const token = getSessionToken(request.headers.cookie || "");
+    const currentUser = token ? sessions.get(token) : null;
+    if (!currentUser) {
+      response.status(401).json({ message: "Please sign in before deleting photos." });
+      return;
+    }
+
     const id = request.params.id;
     const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { originalId: id };
     const photo = await photosCollection.findOne(query);
+
+    if (photo?.ownerId && photo.ownerId !== currentUser.id) {
+      response.status(403).json({ message: "You can only delete your own photos." });
+      return;
+    }
 
     if (!photo) {
       response.status(404).json({ message: "Photo not found." });
@@ -184,7 +358,10 @@ async function startServer() {
     try {
       await client.connect();
       photosCollection = client.db(databaseName).collection("geoPhotos");
+      usersCollection = client.db(databaseName).collection("users");
       await photosCollection.createIndex({ createdAt: -1 });
+      await photosCollection.createIndex({ ownerId: 1 });
+      await usersCollection.createIndex({ email: 1 }, { unique: true });
       console.log(`MongoDB connected. Database: ${databaseName}`);
     } catch (error) {
       console.error("MongoDB connection failed. Website will still run, but database saves will fail until .env is fixed.");

@@ -26,9 +26,23 @@ const themeToggleIcon = document.querySelector("#themeToggleIcon");
 const tabButtons = document.querySelectorAll(".tab-button");
 const views = document.querySelectorAll(".view");
 
-const apiBaseUrl = "http://localhost:3000";
+const apiBaseUrl = window.location.origin;
 const localPhotosKey = "geoTagCameraPhotos";
 const themeStorageKey = "sreegeoTheme";
+const authStatus = document.querySelector("#authStatus");
+const authScreen = document.querySelector("#authScreen");
+const appShell = document.querySelector("#appShell");
+const welcomeBanner = document.querySelector("#welcomeBanner");
+const loginForm = document.querySelector("#loginForm");
+const registerForm = document.querySelector("#registerForm");
+const loginEmail = document.querySelector("#loginEmail");
+const loginPassword = document.querySelector("#loginPassword");
+const registerName = document.querySelector("#registerName");
+const registerEmail = document.querySelector("#registerEmail");
+const registerPassword = document.querySelector("#registerPassword");
+const authTabs = document.querySelectorAll(".auth-tab");
+const authForms = document.querySelectorAll(".auth-form");
+const logoutBtn = document.querySelector("#logoutBtn");
 const apiTimeoutMs = 30000;
 const ipLocationApiUrl = "https://ipapi.co/json/";
 const useIpLocationByDefault = false;
@@ -41,40 +55,241 @@ let toastTimer = null;
 let galleryPhotoCache = null;
 let manualLocationEnabled = false;
 
-databaseStatus.textContent = "MongoDB API";
+if (databaseStatus) {
+  databaseStatus.textContent = "MongoDB API";
+}
 initTheme();
 
-tabButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const targetView = button.dataset.view;
+const mainPaths = new Set(["/main", "/main.html"]);
+const isMainPage = Boolean(appShell) || mainPaths.has(window.location.pathname);
 
-    tabButtons.forEach((tab) => {
+if (isMainPage) {
+  checkAuth();
+} else {
+  if (authScreen) {
+    authScreen.hidden = false;
+  }
+  if (appShell) {
+    appShell.hidden = true;
+  }
+  checkAuth();
+}
+
+authTabs.forEach((button) => {
+  button.addEventListener("click", () => {
+    authTabs.forEach((tab) => {
       const isActive = tab === button;
       tab.classList.toggle("active", isActive);
-      tab.setAttribute("aria-pressed", String(isActive));
+      tab.setAttribute("aria-selected", String(isActive));
     });
 
-    views.forEach((view) => view.classList.toggle("active", view.id === targetView));
-
-    if (targetView === "galleryView") {
-      renderGallery();
-    } else if (targetView === "cameraView") {
-      currentFacingMode = null;
-      startCamera();
-    }
+    authForms.forEach((form) => form.classList.toggle("active", form.id === `${button.dataset.mode}Form`));
   });
 });
 
-startCameraBtn.addEventListener("click", startCamera);
-switchCameraBtn.addEventListener("click", switchCamera);
-captureBtn.addEventListener("click", capturePhoto);
-refreshLocationBtn.addEventListener("click", () => updateLocation({ forceFresh: true, waitForAddress: true }));
-refreshGalleryBtn.addEventListener("click", renderGallery);
-galleryGrid.addEventListener("click", handleGalleryClick);
-manualLocationForm.addEventListener("submit", applyManualLocation);
-themeToggle.addEventListener("click", toggleTheme);
+if (loginForm) {
+  loginForm.addEventListener("submit", handleLogin);
+}
+if (registerForm) {
+  registerForm.addEventListener("submit", handleRegister);
+}
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", handleLogout);
+}
 
-startCamera();
+if (tabButtons.length) {
+  tabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetView = button.dataset.view;
+
+      tabButtons.forEach((tab) => {
+        const isActive = tab === button;
+        tab.classList.toggle("active", isActive);
+        tab.setAttribute("aria-pressed", String(isActive));
+      });
+
+      views.forEach((view) => view.classList.toggle("active", view.id === targetView));
+
+      if (targetView === "galleryView") {
+        renderGallery();
+      } else if (targetView === "cameraView") {
+        currentFacingMode = null;
+        startCamera();
+      }
+    });
+  });
+}
+
+if (startCameraBtn) {
+  startCameraBtn.addEventListener("click", startCamera);
+}
+if (switchCameraBtn) {
+  switchCameraBtn.addEventListener("click", switchCamera);
+}
+if (captureBtn) {
+  captureBtn.addEventListener("click", capturePhoto);
+}
+if (refreshLocationBtn) {
+  refreshLocationBtn.addEventListener("click", () => updateLocation({ forceFresh: true, waitForAddress: true }));
+}
+if (refreshGalleryBtn) {
+  refreshGalleryBtn.addEventListener("click", renderGallery);
+}
+if (galleryGrid) {
+  galleryGrid.addEventListener("click", handleGalleryClick);
+}
+if (manualLocationForm) {
+  manualLocationForm.addEventListener("submit", applyManualLocation);
+}
+if (themeToggle) {
+  themeToggle.addEventListener("click", toggleTheme);
+}
+
+if (cameraFeed && startCameraBtn) {
+  startCamera();
+}
+
+async function checkAuth() {
+  try {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/auth/me`, { credentials: "include" }, "Authentication check timed out.");
+    if (!response.ok) {
+      if (isMainPage) {
+        window.location.replace("/");
+        return;
+      }
+      showAuthScreen(false);
+      return;
+    }
+
+    const data = await response.json();
+    if (data.authenticated) {
+      if (!isMainPage) {
+        window.location.replace("/main.html");
+        return;
+      }
+      showAuthScreen(true, data.user);
+      await renderGallery(true);
+      return;
+    }
+
+    if (isMainPage) {
+      window.location.replace("/");
+      return;
+    }
+    showAuthScreen(false);
+  } catch (error) {
+    if (isMainPage) {
+      window.location.replace("/");
+      return;
+    }
+    showAuthScreen(false);
+  }
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const email = loginEmail.value.trim();
+  const password = loginPassword.value;
+
+  authStatus.textContent = "Signing you in...";
+  try {
+    const response = await fetchWithTimeout(
+      `${apiBaseUrl}/api/auth/login`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        credentials: "include"
+      },
+      "Login request timed out."
+    );
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.message || "Login failed.");
+    }
+
+    showAuthScreen(true, data.user);
+    authStatus.textContent = `Welcome back, ${data.user.name}!`;
+    window.location.replace("/main.html");
+  } catch (error) {
+    authStatus.textContent = error?.message || "Unable to sign in.";
+  }
+}
+
+async function handleRegister(event) {
+  event.preventDefault();
+  const name = registerName.value.trim();
+  const email = registerEmail.value.trim();
+  const password = registerPassword.value;
+
+  authStatus.textContent = "Creating your secure account...";
+  try {
+    const response = await fetchWithTimeout(
+      `${apiBaseUrl}/api/auth/register`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+        credentials: "include"
+      },
+      "Registration request timed out."
+    );
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.message || "Registration failed.");
+    }
+
+    showAuthScreen(true, data.user);
+    authStatus.textContent = `Welcome, ${data.user.name}!`;
+    window.location.replace("/main.html");
+  } catch (error) {
+    authStatus.textContent = error?.message || "Unable to create account.";
+  }
+}
+
+async function handleLogout() {
+  try {
+    await fetchWithTimeout(`${apiBaseUrl}/api/auth/logout`, { method: "POST", credentials: "include" }, "Logout timed out.");
+  } catch (error) {
+    console.error(error);
+  }
+
+  showAuthScreen(false);
+  if (authStatus) {
+    authStatus.textContent = "You have been signed out.";
+  }
+  window.location.replace("/");
+}
+
+function showAuthScreen(authenticated, user = null) {
+  if (authScreen) {
+    authScreen.hidden = authenticated;
+  }
+
+  if (appShell) {
+    appShell.hidden = !authenticated;
+  }
+
+  if (authenticated && user) {
+    if (databaseStatus) {
+      databaseStatus.textContent = `Signed in as ${user.name}`;
+    }
+    if (welcomeBanner) {
+      welcomeBanner.hidden = false;
+      welcomeBanner.textContent = `Welcome, ${user.name}! Your gallery is ready.`;
+    }
+  } else {
+    if (databaseStatus) {
+      databaseStatus.textContent = "Secure session";
+    }
+    if (welcomeBanner) {
+      welcomeBanner.hidden = true;
+      welcomeBanner.textContent = "";
+    }
+  }
+}
 
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -529,7 +744,7 @@ async function deletePhoto(photo, deleteButton) {
     if (photo.source === "mongodb") {
       const response = await fetchWithTimeout(
         `${apiBaseUrl}/api/photos/${encodeURIComponent(photo.mongoId || photo.id)}`,
-        { method: "DELETE" },
+        { method: "DELETE", credentials: "include" },
         "MongoDB delete timed out."
       );
 
@@ -559,7 +774,7 @@ async function loadPhotos(forceReload = false) {
   }
 
   try {
-    const response = await fetchWithTimeout(`${apiBaseUrl}/api/photos`, {}, "MongoDB gallery load timed out.");
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/photos`, { credentials: "include" }, "MongoDB gallery load timed out.");
     if (!response.ok) throw new Error("MongoDB gallery load failed.");
 
     const mongoPhotos = await response.json();
@@ -604,7 +819,8 @@ async function savePhotoToMongo(photo) {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(photo)
+      body: JSON.stringify(photo),
+      credentials: "include"
     },
     "MongoDB save timed out."
   );
