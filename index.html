@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#eef3f8">
+  <meta name="theme-color" content="#ffeaf3">
   <title>Geo Tag Camera</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,6 +38,16 @@
         <div class="video-wrap">
           <video id="cameraFeed" autoplay playsinline muted></video>
           <canvas id="photoCanvas" hidden></canvas>
+          <div class="geo-preview-card" id="geoPreviewCard" hidden>
+            <div class="geo-preview-title">Geo Tag</div>
+            <div class="geo-preview-grid">
+              <span>Lat</span><strong id="previewLatitude">--</strong>
+              <span>Lng</span><strong id="previewLongitude">--</strong>
+              <span>Alt</span><strong id="previewAltitude">--</strong>
+            </div>
+            <p id="previewAddress">Waiting for GPS location...</p>
+            <small id="previewTime">--</small>
+          </div>
           <div class="empty-camera" id="cameraEmpty">
             <strong>Camera preview</strong>
             <span>Allow camera and location permission to begin.</span>

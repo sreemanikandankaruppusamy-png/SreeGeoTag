@@ -1,6 +1,12 @@
 const cameraFeed = document.querySelector("#cameraFeed");
 const photoCanvas = document.querySelector("#photoCanvas");
 const cameraEmpty = document.querySelector("#cameraEmpty");
+const geoPreviewCard = document.querySelector("#geoPreviewCard");
+const previewLatitude = document.querySelector("#previewLatitude");
+const previewLongitude = document.querySelector("#previewLongitude");
+const previewAltitude = document.querySelector("#previewAltitude");
+const previewAddress = document.querySelector("#previewAddress");
+const previewTime = document.querySelector("#previewTime");
 const startCameraBtn = document.querySelector("#startCameraBtn");
 const switchCameraBtn = document.querySelector("#switchCameraBtn");
 const captureBtn = document.querySelector("#captureBtn");
@@ -25,7 +31,7 @@ const localPhotosKey = "geoTagCameraPhotos";
 const themeStorageKey = "sreegeoTheme";
 const apiTimeoutMs = 30000;
 const ipLocationApiUrl = "https://ipapi.co/json/";
-const useIpLocationByDefault = true;
+const useIpLocationByDefault = false;
 const maxPhotoSize = 1280;
 const desiredGpsAccuracyMeters = 25;
 const gpsTimeoutMs = 20000;
@@ -158,7 +164,9 @@ async function updateLocation(options = {}) {
     currentLocation = {
       latitude: position.coords.latitude,
       longitude: position.coords.longitude,
+      altitude: position.coords.altitude,
       accuracy: position.coords.accuracy,
+      altitudeAccuracy: position.coords.altitudeAccuracy,
       address: "Finding address...",
       source: "Device GPS"
     };
@@ -253,7 +261,9 @@ function getAccuratePosition({ forceFresh = false } = {}) {
         currentLocation = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
+          altitude: position.coords.altitude,
           accuracy: position.coords.accuracy,
+          altitudeAccuracy: position.coords.altitudeAccuracy,
           address: currentLocation?.address || "Improving GPS accuracy...",
           source: "Device GPS"
         };
@@ -283,6 +293,7 @@ function updateLocationUi() {
   const lat = currentLocation.latitude.toFixed(6);
   const lng = currentLocation.longitude.toFixed(6);
   const accuracy = Math.round(currentLocation.accuracy);
+  const altitude = formatAltitude(currentLocation.altitude);
   const address = currentLocation.address || "Address is loading...";
   const source = currentLocation.source || "Device GPS";
   const accuracyText =
@@ -292,12 +303,14 @@ function updateLocationUi() {
 
   locationText.textContent = `Latitude: ${lat}
 Longitude: ${lng}
+Altitude: ${altitude}
 Indian Time: ${getIndianTime()}
 Location: ${address}
 Source: ${source}
 ${accuracyText}`;
   mapLink.href = getMapUrl(currentLocation.latitude, currentLocation.longitude);
   mapLink.hidden = false;
+  updatePreviewOverlay();
 }
 
 async function capturePhoto() {
@@ -335,7 +348,9 @@ async function capturePhoto() {
       imageUrl: localImage,
       latitude: currentLocation.latitude,
       longitude: currentLocation.longitude,
+      altitude: currentLocation.altitude,
       accuracy: currentLocation.accuracy,
+      altitudeAccuracy: currentLocation.altitudeAccuracy,
       address: currentLocation.address || "Address not available",
       indianTime,
       createdAt: createdAt.toISOString(),
@@ -386,7 +401,9 @@ async function applyManualLocation(event) {
   currentLocation = {
     latitude,
     longitude,
+    altitude: null,
     accuracy: 0,
+    altitudeAccuracy: null,
     address: "Finding address...",
     source: "Manual GPS"
   };
@@ -404,23 +421,7 @@ function makePhotoBlob() {
   photoCanvas.height = Math.round(cameraFeed.videoHeight * scale);
   context.drawImage(cameraFeed, 0, 0, photoCanvas.width, photoCanvas.height);
 
-  context.fillStyle = "rgba(0, 0, 0, 0.58)";
-  const labelHeight = Math.max(132, Math.round(photoCanvas.height * 0.18));
-  const left = Math.max(18, Math.round(photoCanvas.width * 0.025));
-  const lineGap = Math.max(28, Math.round(labelHeight * 0.2));
-  const firstLineY = photoCanvas.height - labelHeight + lineGap;
-
-  context.fillRect(0, photoCanvas.height - labelHeight, photoCanvas.width, labelHeight);
-  context.fillStyle = "#ffffff";
-  context.font = `${Math.max(16, Math.floor(photoCanvas.width * 0.028))}px Arial`;
-  context.fillText(`Lat: ${currentLocation.latitude.toFixed(6)}`, left, firstLineY);
-  context.fillText(`Lng: ${currentLocation.longitude.toFixed(6)}`, left, firstLineY + lineGap);
-  context.fillText(`IST: ${getIndianTime()}`, left, firstLineY + lineGap * 2);
-  context.fillText(
-    `Place: ${shortenText(currentLocation.address || "Address not available", 52)}`,
-    left,
-    firstLineY + lineGap * 3
-  );
+  drawGeotagStamp(context, photoCanvas.width, photoCanvas.height, currentLocation);
 
   return new Promise((resolve, reject) => {
     photoCanvas.toBlob((blob) => {
@@ -448,6 +449,7 @@ async function renderGallery(forceReload = false) {
     const createdAt = photo.createdAt ? new Date(photo.createdAt) : new Date();
     const lat = Number(photo.latitude).toFixed(5);
     const lng = Number(photo.longitude).toFixed(5);
+    const altitude = formatAltitude(photo.altitude);
     const indianTime = photo.indianTime || getIndianTime(createdAt);
     const address = photo.address || "Address not available";
     const accuracy = Math.round(photo.accuracy || 0);
@@ -457,7 +459,7 @@ async function renderGallery(forceReload = false) {
       <div class="photo-info">
         <strong>${indianTime}</strong>
         <p>${escapeHtml(address)}</p>
-        <p>Lat ${lat}, Lng ${lng}. Accuracy ${accuracy}m</p>
+        <p>Lat ${lat}, Lng ${lng}. Alt ${altitude}. Accuracy ${accuracy}m</p>
         <div class="photo-actions">
           <a href="${getMapUrl(photo.latitude, photo.longitude)}" target="_blank" rel="noreferrer">Map</a>
           <button class="download-button" type="button" data-photo-id="${photo.id}">Download</button>
@@ -747,6 +749,96 @@ function getIndianTime(date = new Date()) {
     second: "2-digit",
     hour12: true
   }).format(date);
+}
+
+function updatePreviewOverlay() {
+  if (!currentLocation) {
+    geoPreviewCard.hidden = true;
+    return;
+  }
+
+  previewLatitude.textContent = currentLocation.latitude.toFixed(6);
+  previewLongitude.textContent = currentLocation.longitude.toFixed(6);
+  previewAltitude.textContent = formatAltitude(currentLocation.altitude);
+  previewAddress.textContent = currentLocation.address || "Address is loading...";
+  previewTime.textContent = getIndianTime();
+  geoPreviewCard.hidden = false;
+}
+
+function drawGeotagStamp(context, width, height, location) {
+  const padding = Math.max(12, Math.round(width * 0.02));
+  const cardWidth = width - padding * 2;
+  const cardHeight = Math.max(110, Math.round(height * 0.16));
+  const cardX = padding;
+  const cardY = height - padding - cardHeight; // place at bottom
+  const titleSize = Math.max(14, Math.floor(width * 0.022));
+  const bodySize = Math.max(13, Math.floor(width * 0.02));
+  const smallSize = Math.max(11, Math.floor(width * 0.016));
+  const rowGap = Math.max(20, Math.round(cardHeight * 0.16));
+  const textX = cardX + padding;
+  let textY = cardY + padding + titleSize;
+
+  // pick theme-aware colors from document theme
+  const theme = document.body?.dataset?.theme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const accent = theme === 'dark' ? '#0b63d6' : '#ffb6c1';
+  const textColor = theme === 'dark' ? '#e5edf8' : '#07111f';
+  const bgColor = theme === 'dark' ? 'rgba(6,18,35,0.48)' : 'rgba(255,255,255,0.14)';
+
+  function roundRect(ctx, x, y, w, h, r) {
+    const radius = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
+
+  context.save();
+  // card background
+  context.fillStyle = bgColor;
+  roundRect(context, cardX, cardY, cardWidth, cardHeight, 14);
+  context.fill();
+
+  // subtle accent line on left
+  context.fillStyle = accent;
+  context.fillRect(cardX + 10, cardY + 12, 6, cardHeight - 24);
+
+  // Text styles
+  context.fillStyle = accent;
+  context.font = `700 ${titleSize}px Arial`;
+  context.fillText('GEO TAG', textX + 22, textY);
+
+  textY += rowGap;
+  context.fillStyle = textColor;
+  context.font = `700 ${bodySize}px Arial`;
+  // two-column layout
+  const col1x = textX + 22;
+  const col2x = cardX + cardWidth * 0.55;
+  context.fillText(`Lat ${location.latitude.toFixed(6)}`, col1x, textY);
+  context.fillText(`Lng ${location.longitude.toFixed(6)}`, col2x, textY);
+
+  textY += rowGap;
+  context.font = `${bodySize}px Arial`;
+  context.fillText(`Alt: ${formatAltitude(location.altitude)}`, col1x, textY);
+  context.fillText(`IST: ${getIndianTime()}`, col2x, textY);
+
+  textY += rowGap;
+  context.font = `${smallSize}px Arial`;
+  context.fillStyle = textColor;
+  const placeText = `Place: ${shortenText(location.address || 'Address not available', 90)}`;
+  context.fillText(placeText, col1x, textY);
+  context.restore();
+}
+
+function formatAltitude(altitude) {
+  const value = Number(altitude);
+  return Number.isFinite(value) ? `${value.toFixed(1)} m` : "Not available";
 }
 
 function shortenText(text, maxLength) {
