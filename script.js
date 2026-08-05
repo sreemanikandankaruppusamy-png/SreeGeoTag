@@ -56,7 +56,7 @@ let galleryPhotoCache = null;
 let manualLocationEnabled = false;
 
 if (databaseStatus) {
-  databaseStatus.textContent = "MongoDB API";
+  databaseStatus.textContent = "SQLite API";
 }
 initTheme();
 
@@ -572,15 +572,15 @@ async function capturePhoto() {
       source: "local"
     };
 
-    const savedPhoto = await savePhotoToMongo(photo);
+    const savedPhoto = await savePhotoToSqlite(photo);
     Object.assign(photo, savedPhoto);
 
     saveLocalPhoto(photo);
     await renderGallery();
-    showToast(photo.source === "mongodb" ? "Photo saved to MongoDB." : "Photo saved on this device.");
+    showToast(photo.source === "sqlite" ? "Photo saved to SQLite." : "Photo saved on this device.");
   } catch (error) {
-    console.error("MongoDB save failed:", error);
-    databaseStatus.textContent = "MongoDB save failed";
+    console.error("SQLite save failed:", error);
+    databaseStatus.textContent = "SQLite save failed";
     if (photo) {
       saveLocalPhoto(photo);
     }
@@ -713,8 +713,8 @@ async function handleGalleryClick(event) {
   try {
     let downloadablePhoto = photo;
 
-    if (photo.source !== "mongodb") {
-      downloadablePhoto = await savePhotoToMongo(photo);
+    if (photo.source !== "sqlite") {
+      downloadablePhoto = await savePhotoToSqlite(photo);
       upsertLocalPhoto(downloadablePhoto);
       await renderGallery();
     } else {
@@ -722,10 +722,10 @@ async function handleGalleryClick(event) {
     }
 
     downloadImage(downloadablePhoto);
-    showToast("Saved to MongoDB and downloading.");
+    showToast("Saved to SQLite and downloading.");
   } catch (error) {
-    console.error("MongoDB download/save failed:", error);
-    databaseStatus.textContent = "MongoDB save failed";
+    console.error("SQLite download/save failed:", error);
+    databaseStatus.textContent = "SQLite save failed";
     showToast(getDatabaseErrorMessage(error));
   } finally {
     downloadButton.disabled = false;
@@ -741,16 +741,16 @@ async function deletePhoto(photo, deleteButton) {
   deleteButton.textContent = "Deleting...";
 
   try {
-    if (photo.source === "mongodb") {
+    if (photo.source === "sqlite") {
       const response = await fetchWithTimeout(
         `${apiBaseUrl}/api/photos/${encodeURIComponent(photo.mongoId || photo.id)}`,
         { method: "DELETE", credentials: "include" },
-        "MongoDB delete timed out."
+        "SQLite delete timed out."
       );
 
       if (!response.ok) {
         const error = await response.json().catch(() => null);
-        throw new Error(error?.message || "MongoDB delete failed.");
+        throw new Error(error?.message || "SQLite delete failed.");
       }
     }
 
@@ -774,17 +774,17 @@ async function loadPhotos(forceReload = false) {
   }
 
   try {
-    const response = await fetchWithTimeout(`${apiBaseUrl}/api/photos`, { credentials: "include" }, "MongoDB gallery load timed out.");
-    if (!response.ok) throw new Error("MongoDB gallery load failed.");
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/photos`, { credentials: "include" }, "SQLite gallery load timed out.");
+    if (!response.ok) throw new Error("SQLite gallery load failed.");
 
-    const mongoPhotos = await response.json();
-    databaseStatus.textContent = "MongoDB connected";
-    galleryPhotoCache = dedupePhotos([...mongoPhotos, ...localPhotos]);
+    const sqlitePhotos = await response.json();
+    databaseStatus.textContent = "SQLite connected";
+    galleryPhotoCache = dedupePhotos([...sqlitePhotos, ...localPhotos]);
     return galleryPhotoCache;
   } catch (error) {
-    console.error("MongoDB gallery load failed:", error);
-    databaseStatus.textContent = "MongoDB offline";
-    showToast("Could not load MongoDB gallery. Showing local photos.");
+    console.error("SQLite gallery load failed:", error);
+    databaseStatus.textContent = "SQLite offline";
+    showToast("Could not load SQLite gallery. Showing local photos.");
     galleryPhotoCache = localPhotos;
     return localPhotos;
   }
@@ -812,8 +812,8 @@ function dedupePhotos(photos) {
   });
 }
 
-async function savePhotoToMongo(photo) {
-  databaseStatus.textContent = "Saving to MongoDB...";
+async function savePhotoToSqlite(photo) {
+  databaseStatus.textContent = "Saving to SQLite...";
   const response = await fetchWithTimeout(
     `${apiBaseUrl}/api/photos`,
     {
@@ -822,15 +822,15 @@ async function savePhotoToMongo(photo) {
       body: JSON.stringify(photo),
       credentials: "include"
     },
-    "MongoDB save timed out."
+    "SQLite save timed out."
   );
 
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.message || "MongoDB save failed.");
+    throw new Error(error?.message || "SQLite save failed.");
   }
 
-  databaseStatus.textContent = "MongoDB saved";
+  databaseStatus.textContent = "SQLite saved";
   return response.json();
 }
 

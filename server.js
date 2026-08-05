@@ -2,7 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const express = require("express");
-const { MongoClient, ObjectId } = require("mongodb");
+const sqlite3 = require("sqlite3").verbose();
 const {
   hashPassword,
   verifyPassword,
@@ -11,26 +11,81 @@ const {
   clearSessionCookie,
   getSessionToken
 } = require("./auth");
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const mongoUri = process.env.MONGODB_URI;
-const databaseName = process.env.MONGODB_DB || "sreegeo";
+const sqlitePath = process.env.SQLITE_DB_PATH || path.join(__dirname, "data", "sreegeo.sqlite");
 const uploadDir = path.join(__dirname, "uploads");
-
-if (!mongoUri) {
-  console.warn("MONGODB_URI is missing. Create .env from .env.example and add your MongoDB connection string.");
-}
-
-const client = mongoUri ? new MongoClient(mongoUri, { serverSelectionTimeoutMS: 5000 }) : null;
-let photosCollection = null;
-let usersCollection = null;
+let db = null;
+let databaseReady = false;
 let sessions = new Map();
 
 function getCurrentUser(request) {
   const token = getSessionToken(request.headers.cookie || "");
   return token ? sessions.get(token) : null;
+}
+
+function ensureDatabase(response) {
+  if (databaseReady) {
+    return true;
+  }
+
+  response.status(503).json({ message: "SQLite database is not connected. Restart the server and check SQLITE_DB_PATH." });
+  return false;
+}
+
+function openDatabase(filePath) {
+  return new Promise((resolve, reject) => {
+    const database = new sqlite3.Database(filePath, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(database);
+    });
+  });
+}
+
+function dbExec(sql) {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(error) {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
+
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (error, row) => {
+      if (error) reject(error);
+      else resolve(row);
+    });
+  });
+}
+
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (error, rows) => {
+      if (error) reject(error);
+      else resolve(rows);
+    });
+  });
 }
 
 app.use(express.json({ limit: "15mb" }));
@@ -74,7 +129,7 @@ app.use("/uploads", express.static(uploadDir));
 app.use(express.static(__dirname));
 
 app.get("/api/health", (request, response) => {
-  response.json({ ok: true, database: Boolean(photosCollection) });
+  response.json({ ok: true, database: databaseReady, databaseType: "sqlite" });
 });
 
 app.get("/api/auth/me", async (request, response) => {
@@ -89,8 +144,7 @@ app.get("/api/auth/me", async (request, response) => {
 });
 
 app.post("/api/auth/register", async (request, response) => {
-  if (!usersCollection) {
-    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+  if (!ensureDatabase(response)) {
     return;
   }
 
@@ -102,24 +156,24 @@ app.post("/api/auth/register", async (request, response) => {
   }
 
   try {
-    const existingUser = await usersCollection.findOne({ email: email.toLowerCase() });
+    const normalizedEmail = email.toLowerCase().trim();
+    const trimmedName = name.trim();
+    const existingUser = await dbGet("SELECT id FROM users WHERE email = ?", [normalizedEmail]);
     if (existingUser) {
       response.status(409).json({ message: "An account with that email already exists." });
       return;
     }
 
     const passwordHash = await hashPassword(password);
-    const createdUser = await usersCollection.insertOne({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      passwordHash,
-      createdAt: new Date()
-    });
+    const createdUser = await dbRun(
+      "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+      [trimmedName, normalizedEmail, passwordHash, new Date().toISOString()]
+    );
 
     const user = {
-      id: String(createdUser.insertedId),
-      name: name.trim(),
-      email: email.toLowerCase().trim()
+      id: String(createdUser.lastID),
+      name: trimmedName,
+      email: normalizedEmail
     };
 
     const token = createSessionToken();
@@ -133,8 +187,7 @@ app.post("/api/auth/register", async (request, response) => {
 });
 
 app.post("/api/auth/login", async (request, response) => {
-  if (!usersCollection) {
-    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+  if (!ensureDatabase(response)) {
     return;
   }
 
@@ -146,20 +199,20 @@ app.post("/api/auth/login", async (request, response) => {
   }
 
   try {
-    const user = await usersCollection.findOne({ email: email.toLowerCase().trim() });
+    const user = await dbGet("SELECT * FROM users WHERE email = ?", [email.toLowerCase().trim()]);
     if (!user) {
       response.status(401).json({ message: "Invalid email or password." });
       return;
     }
 
-    const isValidPassword = await verifyPassword(password, user.passwordHash);
+    const isValidPassword = await verifyPassword(password, user.password_hash);
     if (!isValidPassword) {
       response.status(401).json({ message: "Invalid email or password." });
       return;
     }
 
     const safeUser = {
-      id: String(user._id),
+      id: String(user.id),
       name: user.name,
       email: user.email
     };
@@ -192,27 +245,24 @@ app.get("/api/photos", async (request, response) => {
     return;
   }
 
-  if (!photosCollection) {
-    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+  if (!ensureDatabase(response)) {
     return;
   }
 
   try {
-    const photos = await photosCollection
-      .find({ ownerId: sessions.get(token).id }, { projection: { imageFile: 0 } })
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .toArray();
+    const photos = await dbAll(
+      "SELECT * FROM photos WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
+      [sessions.get(token).id]
+    );
 
     response.json(photos.map(toClientPhoto));
   } catch (error) {
-    response.status(500).json({ message: "Could not load photos from MongoDB." });
+    response.status(500).json({ message: "Could not load photos from SQLite." });
   }
 });
 
 app.post("/api/photos", async (request, response) => {
-  if (!photosCollection) {
-    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+  if (!ensureDatabase(response)) {
     return;
   }
 
@@ -230,18 +280,17 @@ app.post("/api/photos", async (request, response) => {
     }
 
     const document = {
-      ownerId: currentUser.id,
-      originalId: photo.id || crypto.randomUUID(),
-      imageUrl: savedImage.publicUrl,
-      imageFile: savedImage.fileName,
+      owner_id: currentUser.id,
+      original_id: photo.id || crypto.randomUUID(),
+      image_url: savedImage.publicUrl,
+      image_file: savedImage.fileName,
       latitude: Number(photo.latitude),
       longitude: Number(photo.longitude),
       accuracy: Number(photo.accuracy || 0),
       address: photo.address || "Address not available",
-      indianTime: photo.indianTime || "",
-      capturedAt: createdAt,
-      createdAt: new Date(),
-      source: "mongodb"
+      indian_time: photo.indianTime || "",
+      captured_at: createdAt.toISOString(),
+      created_at: new Date().toISOString()
     };
 
     if (!Number.isFinite(document.latitude) || !Number.isFinite(document.longitude)) {
@@ -249,17 +298,35 @@ app.post("/api/photos", async (request, response) => {
       return;
     }
 
-    const result = await photosCollection.insertOne(document);
-    response.status(201).json(toClientPhoto({ ...document, _id: result.insertedId }));
+    const result = await dbRun(
+      `INSERT INTO photos (
+        owner_id, original_id, image_url, image_file, latitude, longitude, accuracy,
+        address, indian_time, captured_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        document.owner_id,
+        document.original_id,
+        document.image_url,
+        document.image_file,
+        document.latitude,
+        document.longitude,
+        document.accuracy,
+        document.address,
+        document.indian_time,
+        document.captured_at,
+        document.created_at
+      ]
+    );
+
+    response.status(201).json(toClientPhoto({ ...document, id: result.lastID }));
   } catch (error) {
-    console.error("MongoDB save failed:", error);
-    response.status(500).json({ message: "Could not save photo to MongoDB." });
+    console.error("SQLite save failed:", error);
+    response.status(500).json({ message: "Could not save photo to SQLite." });
   }
 });
 
 app.delete("/api/photos/:id", async (request, response) => {
-  if (!photosCollection) {
-    response.status(503).json({ message: "MongoDB is not connected. Add MONGODB_URI in .env and restart the server." });
+  if (!ensureDatabase(response)) {
     return;
   }
 
@@ -272,10 +339,11 @@ app.delete("/api/photos/:id", async (request, response) => {
     }
 
     const id = request.params.id;
-    const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { originalId: id };
-    const photo = await photosCollection.findOne(query);
+    const photo = /^\d+$/.test(id)
+      ? await dbGet("SELECT * FROM photos WHERE id = ?", [Number(id)])
+      : await dbGet("SELECT * FROM photos WHERE original_id = ?", [id]);
 
-    if (photo?.ownerId && photo.ownerId !== currentUser.id) {
+    if (photo?.owner_id && photo.owner_id !== currentUser.id) {
       response.status(403).json({ message: "You can only delete your own photos." });
       return;
     }
@@ -285,10 +353,10 @@ app.delete("/api/photos/:id", async (request, response) => {
       return;
     }
 
-    await photosCollection.deleteOne({ _id: photo._id });
+    await dbRun("DELETE FROM photos WHERE id = ?", [photo.id]);
 
-    if (photo.imageFile) {
-      const filePath = path.join(uploadDir, photo.imageFile);
+    if (photo.image_file) {
+      const filePath = path.join(uploadDir, photo.image_file);
       await fs.unlink(filePath).catch((error) => {
         if (error.code !== "ENOENT") {
           console.error("Could not delete image file:", error.message);
@@ -298,8 +366,8 @@ app.delete("/api/photos/:id", async (request, response) => {
 
     response.json({ ok: true });
   } catch (error) {
-    console.error("MongoDB delete failed:", error);
-    response.status(500).json({ message: "Could not delete photo from MongoDB." });
+    console.error("SQLite delete failed:", error);
+    response.status(500).json({ message: "Could not delete photo from SQLite." });
   }
 });
 
@@ -329,17 +397,22 @@ async function saveImage(dataUrl) {
 
 function toClientPhoto(photo) {
   return {
-    id: String(photo._id || photo.originalId),
-    mongoId: photo._id ? String(photo._id) : undefined,
-    imageUrl: makeAbsoluteUrl(photo.imageUrl),
+    id: String(photo.id || photo.original_id || photo.originalId),
+    mongoId: photo.id ? String(photo.id) : undefined,
+    imageUrl: makeAbsoluteUrl(photo.image_url || photo.imageUrl),
     latitude: photo.latitude,
     longitude: photo.longitude,
     accuracy: photo.accuracy,
     address: photo.address,
-    indianTime: photo.indianTime,
-    createdAt: photo.capturedAt?.toISOString?.() || photo.createdAt?.toISOString?.() || new Date().toISOString(),
-    source: "mongodb"
+    indianTime: photo.indian_time || photo.indianTime,
+    createdAt: toIsoString(photo.captured_at || photo.capturedAt || photo.created_at || photo.createdAt),
+    source: "sqlite"
   };
+}
+
+function toIsoString(value) {
+  if (!value) return new Date().toISOString();
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
 function makeAbsoluteUrl(url) {
@@ -349,24 +422,48 @@ function makeAbsoluteUrl(url) {
 
 async function startServer() {
   await fs.mkdir(uploadDir, { recursive: true });
+  await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
 
   app.listen(port, () => {
-    console.log(`SreeGeo server running at http://localhost:${port}`);
+    console.log(`Server running at http://localhost:${port}`);
   });
 
-  if (client) {
-    try {
-      await client.connect();
-      photosCollection = client.db(databaseName).collection("geoPhotos");
-      usersCollection = client.db(databaseName).collection("users");
-      await photosCollection.createIndex({ createdAt: -1 });
-      await photosCollection.createIndex({ ownerId: 1 });
-      await usersCollection.createIndex({ email: 1 }, { unique: true });
-      console.log(`MongoDB connected. Database: ${databaseName}`);
-    } catch (error) {
-      console.error("MongoDB connection failed. Website will still run, but database saves will fail until .env is fixed.");
-      console.error(error.message);
-    }
+  try {
+    db = await openDatabase(sqlitePath);
+    await dbExec(`
+      PRAGMA foreign_keys = ON;
+
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id TEXT NOT NULL,
+        original_id TEXT NOT NULL,
+        image_url TEXT NOT NULL,
+        image_file TEXT,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        accuracy REAL NOT NULL DEFAULT 0,
+        address TEXT NOT NULL,
+        indian_time TEXT,
+        captured_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_photos_owner_created ON photos (owner_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_photos_original_id ON photos (original_id);
+    `);
+    databaseReady = true;
+    console.log(`SQLite connected. Database file: ${sqlitePath}`);
+  } catch (error) {
+    console.error("SQLite connection failed. Website will still run, but database saves will fail until SQLITE_DB_PATH is fixed.");
+    console.error(error.message);
   }
 }
 

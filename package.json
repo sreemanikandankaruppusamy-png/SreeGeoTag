@@ -1,5 +1,5 @@
 {
-  "name": "sreegeo-mongodb-camera",
+  "name": "sreegeo-sqlite-camera",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -9,6 +9,6 @@
   "dependencies": {
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
-    "mongodb": "^6.17.0"
+    "sqlite3": "^6.0.1"
   }
 }
