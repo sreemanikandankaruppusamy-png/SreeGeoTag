@@ -2,7 +2,21 @@ const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
+
+// Safely load sqlite3 with CJS/ESM interop fallback to avoid Vercel bundler crash
+let sqlite3 = null;
+try {
+  const sqliteModule = require("sqlite3");
+  const unwrapped = sqliteModule && sqliteModule.default ? sqliteModule.default : sqliteModule;
+  sqlite3 = typeof unwrapped?.verbose === "function" ? unwrapped.verbose() : unwrapped;
+  if (!sqlite3 || typeof sqlite3.Database !== "function") {
+    sqlite3 = null;
+  }
+} catch (error) {
+  console.warn("sqlite3 native binary not available, using resilient store:", error.message);
+  sqlite3 = null;
+}
+
 const {
   hashPassword,
   verifyPassword,
@@ -18,10 +32,42 @@ const port = Number(process.env.PORT || 3000);
 const isVercel = Boolean(process.env.VERCEL);
 const sqlitePath = process.env.SQLITE_DB_PATH || (isVercel ? path.join("/tmp", "sreegeo.sqlite") : path.join(__dirname, "data", "sreegeo.sqlite"));
 const uploadDir = isVercel ? path.join("/tmp", "uploads") : path.join(__dirname, "uploads");
+const fallbackStorePath = isVercel ? path.join("/tmp", "sreegeo-store.json") : path.join(__dirname, "data", "sreegeo-store.json");
+
 let db = null;
 let databaseReady = false;
 let sessions = new Map();
 let initDbPromise = null;
+let usingFallback = false;
+
+let memStore = {
+  users: [],
+  photos: [],
+  userNextId: 1,
+  photoNextId: 1
+};
+
+async function loadFallbackStore() {
+  try {
+    const raw = await fs.readFile(fallbackStorePath, "utf-8");
+    const data = JSON.parse(raw);
+    if (data && Array.isArray(data.users)) memStore.users = data.users;
+    if (data && Array.isArray(data.photos)) memStore.photos = data.photos;
+    if (data && data.userNextId) memStore.userNextId = data.userNextId;
+    if (data && data.photoNextId) memStore.photoNextId = data.photoNextId;
+  } catch {
+    // Fresh store
+  }
+}
+
+async function saveFallbackStore() {
+  try {
+    await fs.mkdir(path.dirname(fallbackStorePath), { recursive: true }).catch(() => {});
+    await fs.writeFile(fallbackStorePath, JSON.stringify(memStore, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Fallback store write warning:", err.message);
+  }
+}
 
 function getCurrentUser(request) {
   const token = getSessionToken(request.headers.cookie || "");
@@ -33,24 +79,25 @@ function ensureDatabase(response) {
     return true;
   }
 
-  response.status(503).json({ message: "SQLite database is not connected. Restart the server and check SQLITE_DB_PATH." });
+  response.status(503).json({ message: "Database is initializing, please try again." });
   return false;
 }
 
 function openDatabase(filePath) {
+  if (!sqlite3) return Promise.reject(new Error("sqlite3 unavailable"));
   return new Promise((resolve, reject) => {
     const database = new sqlite3.Database(filePath, (error) => {
       if (error) {
         reject(error);
         return;
       }
-
       resolve(database);
     });
   });
 }
 
 function dbExec(sql) {
+  if (usingFallback || !db) return Promise.resolve();
   return new Promise((resolve, reject) => {
     db.exec(sql, (error) => {
       if (error) reject(error);
@@ -60,19 +107,88 @@ function dbExec(sql) {
 }
 
 function dbRun(sql, params = []) {
+  if (usingFallback || !db) {
+    const lowerSql = sql.toLowerCase();
+    if (lowerSql.includes("insert into users")) {
+      const id = memStore.userNextId++;
+      const [name, email, password_hash, created_at] = params;
+      memStore.users.push({ id, name, email, password_hash, created_at });
+      saveFallbackStore();
+      return Promise.resolve({ lastID: id, changes: 1 });
+    }
+    if (lowerSql.includes("insert into photos")) {
+      const id = memStore.photoNextId++;
+      const [
+        owner_id,
+        original_id,
+        image_url,
+        image_file,
+        latitude,
+        longitude,
+        accuracy,
+        address,
+        indian_time,
+        captured_at,
+        created_at
+      ] = params;
+      memStore.photos.push({
+        id,
+        owner_id,
+        original_id,
+        image_url,
+        image_file,
+        latitude,
+        longitude,
+        accuracy,
+        address,
+        indian_time,
+        captured_at,
+        created_at
+      });
+      saveFallbackStore();
+      return Promise.resolve({ lastID: id, changes: 1 });
+    }
+    if (lowerSql.includes("delete from photos")) {
+      const [id, original_id, owner_id] = params;
+      const initialCount = memStore.photos.length;
+      memStore.photos = memStore.photos.filter((p) => {
+        const matchesId = String(p.id) === String(id) || String(p.original_id) === String(original_id);
+        const matchesOwner = String(p.owner_id) === String(owner_id);
+        return !(matchesId && matchesOwner);
+      });
+      saveFallbackStore();
+      return Promise.resolve({ changes: initialCount - memStore.photos.length });
+    }
+    return Promise.resolve({ lastID: 1, changes: 1 });
+  }
+
   return new Promise((resolve, reject) => {
     db.run(sql, params, function onRun(error) {
       if (error) {
         reject(error);
         return;
       }
-
       resolve({ lastID: this.lastID, changes: this.changes });
     });
   });
 }
 
 function dbGet(sql, params = []) {
+  if (usingFallback || !db) {
+    const lowerSql = sql.toLowerCase();
+    if (lowerSql.includes("from users")) {
+      const email = String(params[0] || "").toLowerCase().trim();
+      const user = memStore.users.find((u) => u.email === email);
+      return Promise.resolve(user || null);
+    }
+    if (lowerSql.includes("from photos")) {
+      const id = String(params[0] || "");
+      const photo = memStore.photos.find((p) => String(p.id) === id || String(p.original_id) === id);
+      return Promise.resolve(photo || null);
+    }
+    return Promise.resolve(null);
+  }
+
   return new Promise((resolve, reject) => {
     db.get(sql, params, (error, row) => {
       if (error) reject(error);
@@ -82,6 +198,18 @@ function dbGet(sql, params = []) {
 }
 
 function dbAll(sql, params = []) {
+  if (usingFallback || !db) {
+    const lowerSql = sql.toLowerCase();
+    if (lowerSql.includes("from photos")) {
+      const ownerId = String(params[0] || "");
+      const userPhotos = memStore.photos
+        .filter((p) => String(p.owner_id) === ownerId)
+        .sort((a, b) => b.id - a.id);
+      return Promise.resolve(userPhotos);
+    }
+    return Promise.resolve([]);
+  }
+
   return new Promise((resolve, reject) => {
     db.all(sql, params, (error, rows) => {
       if (error) reject(error);
@@ -138,6 +266,9 @@ app.get("/sw.js", (request, response) => {
   response.setHeader("Content-Type", "application/javascript");
   response.setHeader("Service-Worker-Allowed", "/");
   response.sendFile(path.join(__dirname, "sw.js"));
+});
+app.get("/favicon.ico", (request, response) => {
+  response.sendFile(path.join(__dirname, "icons", "icon.svg"));
 });
 
 app.use("/uploads", express.static(uploadDir));
@@ -436,7 +567,7 @@ function makeAbsoluteUrl(url) {
 }
 
 async function initDatabase() {
-  if (databaseReady && db) return db;
+  if (databaseReady) return true;
 
   if (!initDbPromise) {
     initDbPromise = (async () => {
@@ -444,46 +575,55 @@ async function initDatabase() {
         await fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
         await fs.mkdir(path.dirname(sqlitePath), { recursive: true }).catch(() => {});
 
-        db = await openDatabase(sqlitePath);
-        await dbExec(`
-          PRAGMA foreign_keys = ON;
+        if (sqlite3) {
+          db = await openDatabase(sqlitePath);
+          await dbExec(`
+            PRAGMA foreign_keys = ON;
 
-          CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
-          );
+            CREATE TABLE IF NOT EXISTS users (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              email TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
 
-          CREATE TABLE IF NOT EXISTS photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id TEXT NOT NULL,
-            original_id TEXT NOT NULL,
-            image_url TEXT NOT NULL,
-            image_file TEXT,
-            latitude REAL NOT NULL,
-            longitude REAL NOT NULL,
-            accuracy REAL NOT NULL DEFAULT 0,
-            address TEXT NOT NULL,
-            indian_time TEXT,
-            captured_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
-          );
+            CREATE TABLE IF NOT EXISTS photos (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              owner_id TEXT NOT NULL,
+              original_id TEXT NOT NULL,
+              image_url TEXT NOT NULL,
+              image_file TEXT,
+              latitude REAL NOT NULL,
+              longitude REAL NOT NULL,
+              accuracy REAL NOT NULL DEFAULT 0,
+              address TEXT NOT NULL,
+              indian_time TEXT,
+              captured_at TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
 
-          CREATE INDEX IF NOT EXISTS idx_photos_owner_created ON photos (owner_id, created_at DESC);
-          CREATE INDEX IF NOT EXISTS idx_photos_original_id ON photos (original_id);
-        `);
-        databaseReady = true;
-        console.log(`SQLite connected. Database file: ${sqlitePath}`);
+            CREATE INDEX IF NOT EXISTS idx_photos_owner_created ON photos (owner_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_photos_original_id ON photos (original_id);
+          `);
+          usingFallback = false;
+          databaseReady = true;
+          console.log(`SQLite connected. Database file: ${sqlitePath}`);
+          return;
+        }
       } catch (error) {
-        console.error("SQLite connection warning:", error.message);
+        console.warn("SQLite connection warning, activating fallback store:", error.message);
       }
+
+      usingFallback = true;
+      await loadFallbackStore();
+      databaseReady = true;
+      console.log(`Resilient store connected: ${fallbackStorePath}`);
     })();
   }
 
   await initDbPromise;
-  return db;
+  return databaseReady;
 }
 
 initDatabase().catch((error) => {
