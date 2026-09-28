@@ -15,11 +15,13 @@ require("dotenv").config({ quiet: true });
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const sqlitePath = process.env.SQLITE_DB_PATH || path.join(__dirname, "data", "sreegeo.sqlite");
-const uploadDir = path.join(__dirname, "uploads");
+const isVercel = Boolean(process.env.VERCEL);
+const sqlitePath = process.env.SQLITE_DB_PATH || (isVercel ? path.join("/tmp", "sreegeo.sqlite") : path.join(__dirname, "data", "sreegeo.sqlite"));
+const uploadDir = isVercel ? path.join("/tmp", "uploads") : path.join(__dirname, "uploads");
 let db = null;
 let databaseReady = false;
 let sessions = new Map();
+let initDbPromise = null;
 
 function getCurrentUser(request) {
   const token = getSessionToken(request.headers.cookie || "");
@@ -99,6 +101,13 @@ app.use((request, response, next) => {
     return;
   }
 
+  next();
+});
+
+app.use(async (request, response, next) => {
+  if (!databaseReady) {
+    await initDatabase().catch(() => {});
+  }
   next();
 });
 function sendLoginPage(request, response) {
@@ -426,54 +435,65 @@ function makeAbsoluteUrl(url) {
   return `http://localhost:${port}${url}`;
 }
 
-async function startServer() {
-  await fs.mkdir(uploadDir, { recursive: true });
-  await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+async function initDatabase() {
+  if (databaseReady && db) return db;
 
+  if (!initDbPromise) {
+    initDbPromise = (async () => {
+      try {
+        await fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
+        await fs.mkdir(path.dirname(sqlitePath), { recursive: true }).catch(() => {});
+
+        db = await openDatabase(sqlitePath);
+        await dbExec(`
+          PRAGMA foreign_keys = ON;
+
+          CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id TEXT NOT NULL,
+            original_id TEXT NOT NULL,
+            image_url TEXT NOT NULL,
+            image_file TEXT,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            accuracy REAL NOT NULL DEFAULT 0,
+            address TEXT NOT NULL,
+            indian_time TEXT,
+            captured_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_photos_owner_created ON photos (owner_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_photos_original_id ON photos (original_id);
+        `);
+        databaseReady = true;
+        console.log(`SQLite connected. Database file: ${sqlitePath}`);
+      } catch (error) {
+        console.error("SQLite connection warning:", error.message);
+      }
+    })();
+  }
+
+  await initDbPromise;
+  return db;
+}
+
+initDatabase().catch((error) => {
+  console.warn("Initial DB start warning:", error.message);
+});
+
+if (!process.env.VERCEL) {
   app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
   });
-
-  try {
-    db = await openDatabase(sqlitePath);
-    await dbExec(`
-      PRAGMA foreign_keys = ON;
-
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS photos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        owner_id TEXT NOT NULL,
-        original_id TEXT NOT NULL,
-        image_url TEXT NOT NULL,
-        image_file TEXT,
-        latitude REAL NOT NULL,
-        longitude REAL NOT NULL,
-        accuracy REAL NOT NULL DEFAULT 0,
-        address TEXT NOT NULL,
-        indian_time TEXT,
-        captured_at TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_photos_owner_created ON photos (owner_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_photos_original_id ON photos (original_id);
-    `);
-    databaseReady = true;
-    console.log(`SQLite connected. Database file: ${sqlitePath}`);
-  } catch (error) {
-    console.error("SQLite connection failed. Website will still run, but database saves will fail until SQLITE_DB_PATH is fixed.");
-    console.error(error.message);
-  }
 }
 
-startServer().catch((error) => {
-  console.error("Could not start server:", error);
-  process.exit(1);
-});
+module.exports = app;
