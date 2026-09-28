@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#ffeaf3">
-  <title>SreeGeo Main</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>SreeGeo Camera</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="apple-touch-icon" href="/icons/icon.svg">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SreeGeo">
+  <meta name="application-name" content="SreeGeo">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -23,7 +31,10 @@
         <p class="welcome-banner" id="welcomeBanner">Welcome back!</p>
       </div>
       <div class="app-header-actions">
-        <div class="status-pill" id="databaseStatus">Secure session</div>
+        <button class="install-pwa-btn" type="button" id="installAppBtn" hidden title="Install Mobile App">
+          <span>📲 Install App</span>
+        </button>
+        <div class="status-pill" id="databaseStatus">SQLite connected</div>
         <button class="ghost-button compact" type="button" id="logoutBtn">Logout</button>
       </div>
     </header>
@@ -42,6 +53,22 @@
         <div class="video-wrap">
           <video id="cameraFeed" autoplay playsinline muted></video>
           <canvas id="photoCanvas" hidden></canvas>
+
+          <!-- Top floating controls on camera -->
+          <div class="camera-top-bar">
+            <button class="gps-toggle-btn gps-off" type="button" id="gpsToggleBtn" aria-label="Turn on GPS">
+              <span class="gps-icon">📍</span>
+              <span class="gps-label" id="gpsStatusText">Turn on GPS</span>
+            </button>
+            <button class="cam-icon-btn" type="button" id="switchCameraBtn" title="Switch Front/Back Camera" aria-label="Switch Camera">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 1.956.702 3.748 1.874 5.143L4 19l4.5-1.5"></path>
+                <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-1.956-.702-3.748-1.874-5.143L20 5l-4.5 1.5"></path>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Live Geo Tag Preview Card -->
           <div class="geo-preview-card" id="geoPreviewCard" hidden>
             <div class="geo-preview-title">Geo Tag</div>
             <div class="geo-preview-grid">
@@ -52,34 +79,36 @@
             <p id="previewAddress">Waiting for GPS location...</p>
             <small id="previewTime">--</small>
           </div>
+
           <div class="empty-camera" id="cameraEmpty">
             <strong>Camera preview</strong>
-            <span>Allow camera and location permission to begin.</span>
+            <span>Allow camera permission to begin.</span>
           </div>
-        </div>
 
-        <div class="location-card">
-          <h2 id="cameraTitle">Current Geo Tag</h2>
-          <p id="locationText">Location not captured yet.</p>
-          <a id="mapLink" href="#" target="_blank" rel="noreferrer" hidden>Open map</a>
-          <form class="manual-location" id="manualLocationForm">
-            <label>
-              <span>Latitude</span>
-              <input type="number" id="manualLatitude" inputmode="decimal" step="any" min="-90" max="90" placeholder="11.0168">
-            </label>
-            <label>
-              <span>Longitude</span>
-              <input type="number" id="manualLongitude" inputmode="decimal" step="any" min="-180" max="180" placeholder="76.9558">
-            </label>
-            <button class="ghost-button compact" type="submit">Apply Location</button>
-          </form>
-        </div>
+          <!-- Native Camera Shutter Controls Dock -->
+          <div class="camera-shutter-bar">
+            <div class="shutter-side-slot">
+              <button class="mini-control-btn" type="button" id="refreshLocationBtn" title="Refresh GPS" aria-label="Refresh GPS">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                </svg>
+              </button>
+            </div>
 
-        <div class="actions">
-          <button class="primary-button" type="button" id="startCameraBtn">Start Camera</button>
-          <button class="ghost-button" type="button" id="switchCameraBtn" disabled>Switch Front/Back</button>
-          <button class="capture-button" type="button" id="captureBtn" disabled>Capture</button>
-          <button class="ghost-button" type="button" id="refreshLocationBtn">Refresh GPS</button>
+            <button class="shutter-button" type="button" id="captureBtn" aria-label="Capture Photo">
+              <span class="shutter-outer-ring">
+                <span class="shutter-inner-circle"></span>
+              </span>
+            </button>
+
+            <div class="shutter-side-slot">
+              <button class="mini-control-btn" type="button" id="switchCameraBtnBottom" title="Switch Camera" aria-label="Switch Camera">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M16 3h5v5M4 20L21 3m0 13v5h-5m-9-3L3 21"/>
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </section>

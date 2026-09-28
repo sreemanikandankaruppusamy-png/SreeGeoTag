@@ -1,0 +1,35 @@
+{
+  "name": "SreeGeo GeoTag Camera",
+  "short_name": "SreeGeo",
+  "description": "Mobile Geo Tag Camera with precise GPS coordinates, address stamping, and photo gallery.",
+  "start_url": "/main.html",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "lang": "en",
+  "categories": ["photography", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "192x192 256x256 384x384 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "192x192 256x256 384x384 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open Camera",
+      "url": "/main.html",
+      "description": "Open live camera to capture geo-tagged photos"
+    }
+  ]
+}

@@ -9,8 +9,11 @@ const previewAddress = document.querySelector("#previewAddress");
 const previewTime = document.querySelector("#previewTime");
 const startCameraBtn = document.querySelector("#startCameraBtn");
 const switchCameraBtn = document.querySelector("#switchCameraBtn");
+const switchCameraBtnBottom = document.querySelector("#switchCameraBtnBottom");
 const captureBtn = document.querySelector("#captureBtn");
 const refreshLocationBtn = document.querySelector("#refreshLocationBtn");
+const gpsToggleBtn = document.querySelector("#gpsToggleBtn");
+const gpsStatusText = document.querySelector("#gpsStatusText");
 const refreshGalleryBtn = document.querySelector("#refreshGalleryBtn");
 const locationText = document.querySelector("#locationText");
 const mapLink = document.querySelector("#mapLink");
@@ -54,6 +57,8 @@ let currentFacingMode = null;
 let toastTimer = null;
 let galleryPhotoCache = null;
 let manualLocationEnabled = false;
+let isGpsActive = false;
+let isGpsLoading = false;
 
 if (databaseStatus) {
   databaseStatus.textContent = "SQLite API";
@@ -126,11 +131,17 @@ if (startCameraBtn) {
 if (switchCameraBtn) {
   switchCameraBtn.addEventListener("click", switchCamera);
 }
+if (switchCameraBtnBottom) {
+  switchCameraBtnBottom.addEventListener("click", switchCamera);
+}
 if (captureBtn) {
   captureBtn.addEventListener("click", capturePhoto);
 }
+if (gpsToggleBtn) {
+  gpsToggleBtn.addEventListener("click", () => toggleOrRequestGps());
+}
 if (refreshLocationBtn) {
-  refreshLocationBtn.addEventListener("click", () => updateLocation({ forceFresh: true, waitForAddress: true }));
+  refreshLocationBtn.addEventListener("click", () => toggleOrRequestGps(true));
 }
 if (refreshGalleryBtn) {
   refreshGalleryBtn.addEventListener("click", renderGallery);
@@ -145,7 +156,7 @@ if (themeToggle) {
   themeToggle.addEventListener("click", toggleTheme);
 }
 
-if (cameraFeed && startCameraBtn) {
+if (cameraFeed) {
   startCamera();
 }
 
@@ -310,14 +321,70 @@ async function startCamera() {
     });
 
     cameraFeed.srcObject = stream;
-    cameraEmpty.hidden = true;
-    captureBtn.disabled = false;
-    switchCameraBtn.disabled = false;
-    startCameraBtn.textContent = "Camera On";
-    await updateLocation();
-    showToast(currentFacingMode ? `${getCameraLabel()} camera started.` : "Default camera started.");
+    if (cameraEmpty) cameraEmpty.hidden = true;
+    if (captureBtn) captureBtn.disabled = false;
+    if (switchCameraBtn) switchCameraBtn.disabled = false;
+    if (switchCameraBtnBottom) switchCameraBtnBottom.disabled = false;
+    if (startCameraBtn) startCameraBtn.textContent = "Camera On";
+
+    // Set initial GPS button state without forcing GPS automatically
+    if (!currentLocation && !isGpsActive) {
+      setGpsStatus("off", "Turn on GPS");
+    }
+
+    showToast(currentFacingMode ? `${getCameraLabel()} camera started.` : "Camera ready.");
   } catch (error) {
     showToast("Please allow camera permission and try again.");
+  }
+}
+
+function setGpsStatus(state, label) {
+  if (!gpsToggleBtn) return;
+  const statusEl = document.querySelector("#gpsStatusText");
+  const iconEl = gpsToggleBtn.querySelector(".gps-icon");
+
+  gpsToggleBtn.classList.remove("gps-off", "gps-loading", "gps-active");
+
+  if (state === "loading") {
+    gpsToggleBtn.classList.add("gps-loading");
+    if (statusEl) statusEl.textContent = label || "Locating GPS...";
+    if (iconEl) iconEl.textContent = "⏳";
+    isGpsLoading = true;
+  } else if (state === "active") {
+    gpsToggleBtn.classList.add("gps-active");
+    if (statusEl) statusEl.textContent = label || "GPS Active";
+    if (iconEl) iconEl.textContent = "🟢";
+    isGpsLoading = false;
+    isGpsActive = true;
+  } else {
+    gpsToggleBtn.classList.add("gps-off");
+    if (statusEl) statusEl.textContent = label || "Turn on GPS";
+    if (iconEl) iconEl.textContent = "📍";
+    isGpsLoading = false;
+    isGpsActive = false;
+  }
+}
+
+async function toggleOrRequestGps(isRefresh = false) {
+  if (isGpsLoading) return null;
+
+  setGpsStatus("loading", isRefresh ? "Refreshing GPS..." : "Locating GPS...");
+  showToast(isRefresh ? "Refreshing precise GPS..." : "Requesting GPS location...");
+
+  try {
+    const loc = await updateLocation({ forceFresh: true, waitForAddress: true });
+    if (loc) {
+      setGpsStatus("active", "GPS Active");
+      showToast("GPS Active: Ready to capture!");
+      return loc;
+    } else {
+      setGpsStatus("off", "Turn on GPS");
+      return null;
+    }
+  } catch (error) {
+    setGpsStatus("off", "Turn on GPS");
+    showToast("Please allow GPS location permission.");
+    return null;
   }
 }
 
@@ -338,10 +405,10 @@ async function updateLocation(options = {}) {
   const { forceFresh = false, waitForAddress = false } = options;
   manualLocationEnabled = false;
 
-  mapLink.hidden = true;
+  if (mapLink) mapLink.hidden = true;
 
   if (useIpLocationByDefault) {
-    locationText.textContent = "Getting your approximate location from IP lookup...";
+    if (locationText) locationText.textContent = "Getting your approximate location from IP lookup...";
     try {
       const fallback = await getIpLocation();
       currentLocation = {
@@ -356,23 +423,26 @@ async function updateLocation(options = {}) {
       const address = await findAddress(currentLocation.latitude, currentLocation.longitude);
       currentLocation.address = address;
       updateLocationUi();
+      setGpsStatus("active", "GPS Active");
       return currentLocation;
     } catch (error) {
       currentLocation = null;
-      locationText.textContent = "Could not determine location from IP lookup.";
+      if (locationText) locationText.textContent = "Could not determine location from IP lookup.";
       showToast("IP location lookup failed. Try again later.");
+      setGpsStatus("off", "Turn on GPS");
       return null;
     }
   }
 
   if (!navigator.geolocation) {
-    locationText.textContent = "Geolocation is not supported in this browser.";
+    if (locationText) locationText.textContent = "Geolocation is not supported in this browser.";
     showToast("GPS is not supported here.");
+    setGpsStatus("off", "GPS Unsupported");
     return null;
   }
 
-  locationText.textContent = "Getting your precise GPS location...";
-  mapLink.hidden = true;
+  if (locationText) locationText.textContent = "Getting your precise GPS location...";
+  if (mapLink) mapLink.hidden = true;
 
   try {
     const position = await getAccuratePosition({ forceFresh });
@@ -386,6 +456,7 @@ async function updateLocation(options = {}) {
       source: "Device GPS"
     };
     updateLocationUi();
+    setGpsStatus("active", "GPS Active");
 
     const addressPromise = findAddress(currentLocation.latitude, currentLocation.longitude).then((address) => {
       currentLocation.address = address;
@@ -412,12 +483,14 @@ async function updateLocation(options = {}) {
 
       currentLocation.address = await findAddress(currentLocation.latitude, currentLocation.longitude);
       updateLocationUi();
-      showToast("GPS failed, using IP-based location lookup.");
+      setGpsStatus("active", "GPS Active");
+      showToast("GPS approximate: using IP lookup.");
       return currentLocation;
     } catch (fallbackError) {
       currentLocation = null;
-      locationText.textContent = getLocationErrorMessage(error);
+      if (locationText) locationText.textContent = getLocationErrorMessage(error);
       showToast("Please allow location permission and turn on GPS.");
+      setGpsStatus("off", "Turn on GPS");
       return null;
     }
   }
@@ -516,39 +589,48 @@ function updateLocationUi() {
       ? `High accuracy: ${accuracy} meters`
       : `Approx accuracy: ${accuracy} meters. For best result, turn on phone GPS and stand near open sky.`;
 
-  locationText.textContent = `Latitude: ${lat}
+  if (locationText) {
+    locationText.textContent = `Latitude: ${lat}
 Longitude: ${lng}
 Altitude: ${altitude}
 Indian Time: ${getIndianTime()}
 Location: ${address}
 Source: ${source}
 ${accuracyText}`;
-  mapLink.href = getMapUrl(currentLocation.latitude, currentLocation.longitude);
-  mapLink.hidden = false;
+  }
+
+  if (mapLink) {
+    mapLink.href = getMapUrl(currentLocation.latitude, currentLocation.longitude);
+    mapLink.hidden = false;
+  }
+
   updatePreviewOverlay();
 }
 
 async function capturePhoto() {
   if (!cameraFeed.videoWidth) {
-    showToast("Start the camera before capturing.");
+    showToast("Camera is loading. Please wait a moment.");
+    return;
+  }
+
+  // If GPS is not active, prompt to acquire it
+  if (!currentLocation && !isGpsActive) {
+    showToast("Acquiring GPS location for your photo...");
+    const loc = await toggleOrRequestGps();
+    if (!loc && !currentLocation) {
+      showToast("Please tap 'Turn on GPS' and allow location permission to tag photo.");
+      return;
+    }
+  }
+
+  if (!currentLocation) {
+    showToast("Please tap 'Turn on GPS' and allow location permission to tag photo.");
     return;
   }
 
   captureBtn.disabled = true;
-  captureBtn.textContent = "Getting GPS...";
-
-  if (!manualLocationEnabled) {
-    await updateLocation({ forceFresh: true, waitForAddress: true });
-  }
-
-  if (!currentLocation) {
-    showToast("Photo needs GPS permission before saving.");
-    captureBtn.disabled = false;
-    captureBtn.textContent = "Capture";
-    return;
-  }
-
-  captureBtn.textContent = "Saving...";
+  captureBtn.classList.add("shutter-pressed");
+  showToast("Saving geo-tagged photo...");
 
   let photo = null;
 
@@ -577,7 +659,7 @@ async function capturePhoto() {
 
     saveLocalPhoto(photo);
     await renderGallery();
-    showToast(photo.source === "sqlite" ? "Photo saved to SQLite." : "Photo saved on this device.");
+    showToast(photo.source === "sqlite" ? "Photo saved to SQLite!" : "Photo saved to gallery!");
   } catch (error) {
     console.error("SQLite save failed:", error);
     databaseStatus.textContent = "SQLite save failed";
@@ -590,7 +672,7 @@ async function capturePhoto() {
     showToast(getDatabaseErrorMessage(error));
   } finally {
     captureBtn.disabled = false;
-    captureBtn.textContent = "Capture";
+    captureBtn.classList.remove("shutter-pressed");
   }
 }
 
@@ -1135,3 +1217,52 @@ function setTheme(theme) {
   themeToggleIcon.textContent = theme === "dark" ? "L" : "D";
   themeToggle.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
 }
+
+// --- Progressive Web App (PWA) Mobile App Installation ---
+let deferredPrompt = null;
+const installAppBtn = document.querySelector("#installAppBtn");
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredPrompt = event;
+  if (installAppBtn) {
+    installAppBtn.hidden = false;
+  }
+});
+
+if (installAppBtn) {
+  installAppBtn.addEventListener("click", async () => {
+    if (!deferredPrompt) {
+      showToast("To install, tap browser menu (⋮) -> 'Add to Home Screen'");
+      return;
+    }
+
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") {
+      showToast("Installing SreeGeo App...");
+      installAppBtn.hidden = true;
+    }
+    deferredPrompt = null;
+  });
+}
+
+window.addEventListener("appinstalled", () => {
+  if (installAppBtn) installAppBtn.hidden = true;
+  showToast("SreeGeo App successfully installed!");
+});
+
+// Register Service Worker for offline capability & PWA installability
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((reg) => {
+        console.log("SreeGeo Service Worker registered:", reg.scope);
+      })
+      .catch((err) => {
+        console.warn("Service Worker registration failed:", err);
+      });
+  });
+}
+

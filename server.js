@@ -124,6 +124,12 @@ app.get("/login", sendLoginPage);
 app.get("/index.html", sendLoginPage);
 app.get("/main", sendMainPage);
 app.get("/main.html", sendMainPage);
+app.get("/sw.js", (request, response) => {
+  response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  response.setHeader("Content-Type", "application/javascript");
+  response.setHeader("Service-Worker-Allowed", "/");
+  response.sendFile(path.join(__dirname, "sw.js"));
+});
 
 app.use("/uploads", express.static(uploadDir));
 app.use(express.static(__dirname));
