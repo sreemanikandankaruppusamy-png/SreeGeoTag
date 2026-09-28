@@ -270,6 +270,14 @@ app.get("/sw.js", (request, response) => {
 app.get("/favicon.ico", (request, response) => {
   response.sendFile(path.join(__dirname, "icons", "icon.svg"));
 });
+app.get("/style.css", (request, response) => {
+  response.setHeader("Content-Type", "text/css");
+  response.sendFile(path.join(__dirname, "style.css"));
+});
+app.get("/script.js", (request, response) => {
+  response.setHeader("Content-Type", "application/javascript");
+  response.sendFile(path.join(__dirname, "script.js"));
+});
 
 app.use("/uploads", express.static(uploadDir));
 app.use(express.static(__dirname));
