@@ -21,6 +21,7 @@ const {
   hashPassword,
   verifyPassword,
   createSessionToken,
+  verifySessionToken,
   createSessionCookie,
   clearSessionCookie,
   getSessionToken
@@ -36,7 +37,6 @@ const fallbackStorePath = isVercel ? path.join("/tmp", "sreegeo-store.json") : p
 
 let db = null;
 let databaseReady = false;
-let sessions = new Map();
 let initDbPromise = null;
 let usingFallback = false;
 
@@ -70,8 +70,16 @@ async function saveFallbackStore() {
 }
 
 function getCurrentUser(request) {
+  const authHeader = request.headers.authorization || request.headers.Authorization || "";
+  if (authHeader.startsWith("Bearer ")) {
+    const bearerToken = authHeader.slice(7).trim();
+    const userFromBearer = verifySessionToken(bearerToken);
+    if (userFromBearer) return userFromBearer;
+  }
+
   const token = getSessionToken(request.headers.cookie || "");
-  return token ? sessions.get(token) : null;
+  if (!token) return null;
+  return verifySessionToken(token);
 }
 
 function ensureDatabase(response) {
@@ -248,11 +256,6 @@ function sendLoginPage(request, response) {
 }
 
 function sendMainPage(request, response) {
-  if (!getCurrentUser(request)) {
-    response.redirect("/");
-    return;
-  }
-
   response.sendFile(path.join(__dirname, "main.html"));
 }
 
@@ -287,14 +290,13 @@ app.get("/api/health", (request, response) => {
 });
 
 app.get("/api/auth/me", async (request, response) => {
-  const token = getSessionToken(request.headers.cookie || "");
-
-  if (!token || !sessions.has(token)) {
+  const user = getCurrentUser(request);
+  if (!user) {
     response.status(401).json({ authenticated: false });
     return;
   }
 
-  response.json({ authenticated: true, user: sessions.get(token) });
+  response.json({ authenticated: true, user });
 });
 
 app.post("/api/auth/register", async (request, response) => {
@@ -330,10 +332,9 @@ app.post("/api/auth/register", async (request, response) => {
       email: normalizedEmail
     };
 
-    const token = createSessionToken();
-    sessions.set(token, user);
-    response.setHeader("Set-Cookie", createSessionCookie(token));
-    response.status(201).json({ authenticated: true, user });
+    const token = createSessionToken(user);
+    response.setHeader("Set-Cookie", createSessionCookie(token, isVercel));
+    response.status(201).json({ authenticated: true, user, token });
   } catch (error) {
     console.error("User registration failed:", error);
     response.status(500).json({ message: "Could not create your account." });
@@ -371,10 +372,9 @@ app.post("/api/auth/login", async (request, response) => {
       email: user.email
     };
 
-    const token = createSessionToken();
-    sessions.set(token, safeUser);
-    response.setHeader("Set-Cookie", createSessionCookie(token));
-    response.json({ authenticated: true, user: safeUser });
+    const token = createSessionToken(safeUser);
+    response.setHeader("Set-Cookie", createSessionCookie(token, isVercel));
+    response.json({ authenticated: true, user: safeUser, token });
   } catch (error) {
     console.error("User login failed:", error);
     response.status(500).json({ message: "Could not sign you in." });
@@ -382,19 +382,13 @@ app.post("/api/auth/login", async (request, response) => {
 });
 
 app.post("/api/auth/logout", (request, response) => {
-  const token = getSessionToken(request.headers.cookie || "");
-
-  if (token) {
-    sessions.delete(token);
-  }
-
-  response.setHeader("Set-Cookie", clearSessionCookie());
-  response.json({ ok: true });
+  response.setHeader("Set-Cookie", clearSessionCookie(isVercel));
+  response.json({ ok: true, message: "Logged out" });
 });
 
 app.get("/api/photos", async (request, response) => {
-  const token = getSessionToken(request.headers.cookie || "");
-  if (!token || !sessions.has(token)) {
+  const currentUser = getCurrentUser(request);
+  if (!currentUser) {
     response.status(401).json({ message: "Please sign in to view your gallery." });
     return;
   }
@@ -406,7 +400,7 @@ app.get("/api/photos", async (request, response) => {
   try {
     const photos = await dbAll(
       "SELECT * FROM photos WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
-      [sessions.get(token).id]
+      [currentUser.id]
     );
 
     response.json(photos.map(toClientPhoto));
@@ -425,8 +419,7 @@ app.post("/api/photos", async (request, response) => {
     const savedImage = await saveImage(photo.imageUrl);
     const createdAt = photo.createdAt ? new Date(photo.createdAt) : new Date();
 
-    const token = getSessionToken(request.headers.cookie || "");
-    const currentUser = token ? sessions.get(token) : null;
+    const currentUser = getCurrentUser(request);
 
     if (!currentUser) {
       response.status(401).json({ message: "Please sign in before saving photos." });
@@ -485,8 +478,7 @@ app.delete("/api/photos/:id", async (request, response) => {
   }
 
   try {
-    const token = getSessionToken(request.headers.cookie || "");
-    const currentUser = token ? sessions.get(token) : null;
+    const currentUser = getCurrentUser(request);
     if (!currentUser) {
       response.status(401).json({ message: "Please sign in before deleting photos." });
       return;

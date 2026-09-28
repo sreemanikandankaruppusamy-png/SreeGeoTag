@@ -161,9 +161,35 @@ if (cameraFeed) {
 }
 
 async function checkAuth() {
+  const token = localStorage.getItem("sreegeo_token");
+  const cachedUserRaw = localStorage.getItem("sreegeo_user");
+  let cachedUser = null;
   try {
-    const response = await fetchWithTimeout(`${apiBaseUrl}/api/auth/me`, { credentials: "include" }, "Authentication check timed out.");
+    if (cachedUserRaw) cachedUser = JSON.parse(cachedUserRaw);
+  } catch {}
+
+  // Strictly enforce login: If on main page without token or cached user, kick back to login
+  if (isMainPage && !token && !cachedUser) {
+    window.location.replace("/");
+    return;
+  }
+
+  // If on main page with cached user, render UI while validating with backend
+  if (isMainPage && cachedUser) {
+    showAuthScreen(true, cachedUser);
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      `${apiBaseUrl}/api/auth/me`,
+      { credentials: "include" },
+      "Authentication check timed out."
+    );
+
     if (!response.ok) {
+      // Backend rejected session (invalid, expired, or missing)
+      localStorage.removeItem("sreegeo_user");
+      localStorage.removeItem("sreegeo_token");
       if (isMainPage) {
         window.location.replace("/");
         return;
@@ -173,27 +199,40 @@ async function checkAuth() {
     }
 
     const data = await response.json();
-    if (data.authenticated) {
+    if (data.authenticated && data.user) {
+      localStorage.setItem("sreegeo_user", JSON.stringify(data.user));
+      if (data.token) {
+        localStorage.setItem("sreegeo_token", data.token);
+      }
+
+      // If user is on index.html (login page) and already authenticated, go to main
       if (!isMainPage) {
         window.location.replace("/main.html");
         return;
       }
+
       showAuthScreen(true, data.user);
       await renderGallery(true);
       return;
     }
 
+    // Not authenticated
+    localStorage.removeItem("sreegeo_user");
+    localStorage.removeItem("sreegeo_token");
     if (isMainPage) {
       window.location.replace("/");
       return;
     }
     showAuthScreen(false);
   } catch (error) {
-    if (isMainPage) {
+    console.warn("Auth check notice:", error);
+    if (isMainPage && (!cachedUser || !token)) {
       window.location.replace("/");
       return;
     }
-    showAuthScreen(false);
+    if (!isMainPage && cachedUser && token) {
+      window.location.replace("/main.html");
+    }
   }
 }
 
@@ -220,8 +259,15 @@ async function handleLogin(event) {
       throw new Error(data?.message || "Login failed.");
     }
 
+    if (data.user) {
+      localStorage.setItem("sreegeo_user", JSON.stringify(data.user));
+    }
+    if (data.token) {
+      localStorage.setItem("sreegeo_token", data.token);
+    }
+
     showAuthScreen(true, data.user);
-    authStatus.textContent = `Welcome back, ${data.user.name}!`;
+    authStatus.textContent = `Welcome back, ${data.user.name}! Redirecting...`;
     window.location.replace("/main.html");
   } catch (error) {
     authStatus.textContent = error?.message || "Unable to sign in.";
@@ -252,8 +298,15 @@ async function handleRegister(event) {
       throw new Error(data?.message || "Registration failed.");
     }
 
+    if (data.user) {
+      localStorage.setItem("sreegeo_user", JSON.stringify(data.user));
+    }
+    if (data.token) {
+      localStorage.setItem("sreegeo_token", data.token);
+    }
+
     showAuthScreen(true, data.user);
-    authStatus.textContent = `Welcome, ${data.user.name}!`;
+    authStatus.textContent = `Welcome, ${data.user.name}! Redirecting...`;
     window.location.replace("/main.html");
   } catch (error) {
     authStatus.textContent = error?.message || "Unable to create account.";
@@ -267,6 +320,8 @@ async function handleLogout() {
     console.error(error);
   }
 
+  localStorage.removeItem("sreegeo_user");
+  localStorage.removeItem("sreegeo_token");
   showAuthScreen(false);
   if (authStatus) {
     authStatus.textContent = "You have been signed out.";
@@ -1149,13 +1204,21 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-async function fetchWithTimeout(url, options, message) {
+async function fetchWithTimeout(url, options = {}, message) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), apiTimeoutMs);
+
+  const token = localStorage.getItem("sreegeo_token");
+  const headers = { ...(options.headers || {}) };
+  if (token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
 
   try {
     return await fetch(url, {
       ...options,
+      headers,
+      credentials: options.credentials || "include",
       signal: controller.signal
     });
   } catch (error) {

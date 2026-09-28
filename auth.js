@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const PBKDF2_ITERATIONS = 310000;
 const PBKDF2_LENGTH = 32;
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+const SESSION_SECRET = process.env.SESSION_SECRET || "sreegeo-camera-secret-key-2026";
 
 function hashPassword(password) {
   return new Promise((resolve, reject) => {
@@ -47,16 +48,48 @@ function verifyPassword(password, storedHash) {
   });
 }
 
-function createSessionToken() {
-  return crypto.randomBytes(24).toString("hex");
+function createSessionToken(user = {}) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      id: String(user.id || ""),
+      name: String(user.name || "User"),
+      email: String(user.email || "")
+    })
+  ).toString("base64url");
+
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
 }
 
-function createSessionCookie(token) {
-  return `sreegeo_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
+function verifySessionToken(token) {
+  if (!token || typeof token !== "string" || !token.includes(".")) {
+    return null;
+  }
+
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+
+  const expectedSignature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  if (signature !== expectedSignature) {
+    return null;
+  }
+
+  try {
+    const raw = Buffer.from(payload, "base64url").toString("utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
-function clearSessionCookie() {
-  return "sreegeo_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0";
+function createSessionCookie(token, isSecure = false) {
+  const secureFlag = isSecure ? "; Secure" : "";
+  return `sreegeo_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureFlag}`;
+}
+
+function clearSessionCookie(isSecure = false) {
+  const secureFlag = isSecure ? "; Secure" : "";
+  return `sreegeo_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureFlag}`;
 }
 
 function getSessionToken(cookieHeader) {
@@ -78,6 +111,7 @@ module.exports = {
   hashPassword,
   verifyPassword,
   createSessionToken,
+  verifySessionToken,
   createSessionCookie,
   clearSessionCookie,
   getSessionToken
