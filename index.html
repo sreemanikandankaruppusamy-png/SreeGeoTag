@@ -159,6 +159,43 @@
     .theme-toggle {
       display: none;
     }
+    .form-sub-links {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: -4px;
+    }
+    .text-link-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      transition: opacity 150ms ease;
+    }
+    .text-link-btn:hover {
+      opacity: 0.8;
+    }
+    .auth-back-btn {
+      width: 100%;
+      margin-top: 6px;
+      min-height: 44px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 0.88rem;
+      transition: all 160ms ease;
+    }
+    .auth-back-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--ink);
+    }
     .toast {
       position: fixed;
       left: 50%;
@@ -203,6 +240,9 @@
           <span>Password</span>
           <input id="loginPassword" type="password" placeholder="Enter password" required>
         </label>
+        <div class="form-sub-links">
+          <button type="button" class="text-link-btn" id="forgotPasswordBtn">Forgot password?</button>
+        </div>
         <button class="primary-button auth-submit" type="submit">Sign in</button>
       </form>
 
@@ -220,6 +260,23 @@
           <input id="registerPassword" type="password" placeholder="Choose a strong password" required>
         </label>
         <button class="primary-button auth-submit" type="submit">Create account</button>
+      </form>
+
+      <form class="auth-form" id="forgotForm">
+        <label>
+          <span>Account Email</span>
+          <input id="forgotEmail" type="email" placeholder="you@example.com" required>
+        </label>
+        <label>
+          <span>New Password</span>
+          <input id="forgotPassword" type="password" placeholder="At least 6 characters" required minlength="6">
+        </label>
+        <label>
+          <span>Confirm New Password</span>
+          <input id="forgotConfirmPassword" type="password" placeholder="Re-enter new password" required minlength="6">
+        </label>
+        <button class="primary-button auth-submit" type="submit">Reset Password</button>
+        <button type="button" class="auth-back-btn" id="backToLoginBtn">← Back to Sign in</button>
       </form>
 
       <p class="auth-status" id="authStatus">Use your email and password to continue.</p>

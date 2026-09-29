@@ -44,6 +44,12 @@ const loginPassword = document.querySelector("#loginPassword");
 const registerName = document.querySelector("#registerName");
 const registerEmail = document.querySelector("#registerEmail");
 const registerPassword = document.querySelector("#registerPassword");
+const forgotForm = document.querySelector("#forgotForm");
+const forgotEmail = document.querySelector("#forgotEmail");
+const forgotPassword = document.querySelector("#forgotPassword");
+const forgotConfirmPassword = document.querySelector("#forgotConfirmPassword");
+const forgotPasswordBtn = document.querySelector("#forgotPasswordBtn");
+const backToLoginBtn = document.querySelector("#backToLoginBtn");
 const authTabs = document.querySelectorAll(".auth-tab");
 const authForms = document.querySelectorAll(".auth-form");
 const logoutBtn = document.querySelector("#logoutBtn");
@@ -98,6 +104,37 @@ if (loginForm) {
 }
 if (registerForm) {
   registerForm.addEventListener("submit", handleRegister);
+}
+if (forgotForm) {
+  forgotForm.addEventListener("submit", handleResetPassword);
+}
+if (forgotPasswordBtn) {
+  forgotPasswordBtn.addEventListener("click", () => {
+    authTabs.forEach((tab) => {
+      tab.classList.remove("active");
+      tab.setAttribute("aria-selected", "false");
+    });
+    authForms.forEach((form) => form.classList.toggle("active", form.id === "forgotForm"));
+    if (forgotEmail && loginEmail && loginEmail.value) {
+      forgotEmail.value = loginEmail.value;
+    }
+    if (authStatus) {
+      authStatus.textContent = "Enter your registered email and a new password.";
+    }
+  });
+}
+if (backToLoginBtn) {
+  backToLoginBtn.addEventListener("click", () => {
+    authTabs.forEach((tab) => {
+      const isLogin = tab.dataset.mode === "login";
+      tab.classList.toggle("active", isLogin);
+      tab.setAttribute("aria-selected", String(isLogin));
+    });
+    authForms.forEach((form) => form.classList.toggle("active", form.id === "loginForm"));
+    if (authStatus) {
+      authStatus.textContent = "Use your email and password to continue.";
+    }
+  });
 }
 if (logoutBtn) {
   logoutBtn.addEventListener("click", handleLogout);
@@ -257,16 +294,37 @@ async function handleLogin(event) {
         body: JSON.stringify({ email, password }),
         credentials: "include"
       },
-      "Login request timed out."
+      "Login request timed out. Please check if backend server is running."
     );
 
-    const data = await response.json().catch(() => null);
-    if (!response.ok || !data) {
-      throw new Error(data?.message || data?.error || "Login failed.");
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
 
-    if (!data.user) {
-      throw new Error(data?.message || data?.error || "Authentication failed: No user returned.");
+    if (!response.ok) {
+      if (data?.message) {
+        throw new Error(data.message);
+      }
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+      if (response.status === 401) {
+        throw new Error("Invalid email or password. If you don't have an account, click 'Create account' first.");
+      }
+      if (response.status === 404) {
+        throw new Error("Server route not found (404). Ensure server is running at http://localhost:3000.");
+      }
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        throw new Error("Server is currently unavailable (503). Start backend with 'npm run dev'.");
+      }
+      throw new Error(`Login failed with HTTP status ${response.status}.`);
+    }
+
+    if (!data || !data.user) {
+      throw new Error("Server response did not include user profile. Please try again.");
     }
 
     if (data.user) {
@@ -301,16 +359,37 @@ async function handleRegister(event) {
         body: JSON.stringify({ name, email, password }),
         credentials: "include"
       },
-      "Registration request timed out."
+      "Registration request timed out. Please check if backend server is running."
     );
 
-    const data = await response.json().catch(() => null);
-    if (!response.ok || !data) {
-      throw new Error(data?.message || data?.error || "Registration failed.");
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
 
-    if (!data.user) {
-      throw new Error(data?.message || data?.error || "Registration failed: No user returned.");
+    if (!response.ok) {
+      if (data?.message) {
+        throw new Error(data.message);
+      }
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+      if (response.status === 409) {
+        throw new Error("An account with that email already exists. Please switch to Login tab.");
+      }
+      if (response.status === 404) {
+        throw new Error("Server route not found (404). Ensure server is running at http://localhost:3000.");
+      }
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        throw new Error("Server is currently unavailable (503). Start backend with 'npm run dev'.");
+      }
+      throw new Error(`Registration failed with HTTP status ${response.status}.`);
+    }
+
+    if (!data || !data.user) {
+      throw new Error("Registration response was incomplete. Please try again.");
     }
 
     if (data.user) {
@@ -326,6 +405,70 @@ async function handleRegister(event) {
     window.location.replace("/main.html");
   } catch (error) {
     authStatus.textContent = error?.message || "Unable to create account.";
+  }
+}
+
+async function handleResetPassword(event) {
+  event.preventDefault();
+  const email = forgotEmail.value.trim();
+  const newPassword = forgotPassword.value;
+  const confirmPassword = forgotConfirmPassword.value;
+
+  if (newPassword !== confirmPassword) {
+    authStatus.textContent = "Passwords do not match. Please verify both fields.";
+    return;
+  }
+
+  if (newPassword.length < 6) {
+    authStatus.textContent = "Password must be at least 6 characters long.";
+    return;
+  }
+
+  authStatus.textContent = "Updating your password...";
+  try {
+    const response = await fetchWithTimeout(
+      `${apiBaseUrl}/api/auth/reset-password`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, newPassword }),
+        credentials: "include"
+      },
+      "Password reset timed out. Please check if backend server is running."
+    );
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(data?.message || data?.error || `Reset failed with HTTP ${response.status}`);
+    }
+
+    // Switch back to login form with email prefilled
+    authTabs.forEach((tab) => {
+      const isLogin = tab.dataset.mode === "login";
+      tab.classList.toggle("active", isLogin);
+      tab.setAttribute("aria-selected", String(isLogin));
+    });
+    authForms.forEach((form) => form.classList.toggle("active", form.id === "loginForm"));
+
+    if (loginEmail) {
+      loginEmail.value = email;
+    }
+    if (loginPassword) {
+      loginPassword.value = "";
+      loginPassword.focus();
+    }
+    if (forgotPassword) forgotPassword.value = "";
+    if (forgotConfirmPassword) forgotConfirmPassword.value = "";
+
+    authStatus.textContent = "Password updated successfully! Please sign in with your new password.";
+  } catch (error) {
+    authStatus.textContent = error?.message || "Could not reset password.";
   }
 }
 

@@ -124,6 +124,16 @@ function dbRun(sql, params = []) {
       saveFallbackStore();
       return Promise.resolve({ lastID: id, changes: 1 });
     }
+    if (lowerSql.includes("update users set password_hash")) {
+      const [password_hash, email] = params;
+      const user = memStore.users.find((u) => u.email === String(email).toLowerCase().trim());
+      if (user) {
+        user.password_hash = password_hash;
+        saveFallbackStore();
+        return Promise.resolve({ changes: 1 });
+      }
+      return Promise.resolve({ changes: 0 });
+    }
     if (lowerSql.includes("insert into photos")) {
       const id = memStore.photoNextId++;
       const [
@@ -291,11 +301,19 @@ app.get("/script.js", (request, response) => {
 app.use("/uploads", express.static(uploadDir));
 app.use(express.static(__dirname));
 
-app.get("/api/health", (request, response) => {
+app.use((request, response, next) => {
+  const matchedPath = request.headers["x-matched-path"] || request.headers["x-invoke-path"];
+  if (matchedPath && matchedPath.startsWith("/api/")) {
+    request.url = matchedPath;
+  }
+  next();
+});
+
+app.get(["/api/health", "/health"], (request, response) => {
   response.json({ ok: true, database: databaseReady, databaseType: "sqlite" });
 });
 
-app.get("/api/auth/me", async (request, response) => {
+app.get(["/api/auth/me", "/auth/me"], async (request, response) => {
   const user = getCurrentUser(request);
   if (!user) {
     response.status(401).json({ authenticated: false });
@@ -305,7 +323,7 @@ app.get("/api/auth/me", async (request, response) => {
   response.json({ authenticated: true, user });
 });
 
-app.post("/api/auth/register", async (request, response) => {
+app.post(["/api/auth/register", "/auth/register"], async (request, response) => {
   if (!ensureDatabase(response)) {
     return;
   }
@@ -347,7 +365,7 @@ app.post("/api/auth/register", async (request, response) => {
   }
 });
 
-app.post("/api/auth/login", async (request, response) => {
+app.post(["/api/auth/login", "/auth/login"], async (request, response) => {
   if (!ensureDatabase(response)) {
     return;
   }
@@ -387,12 +405,47 @@ app.post("/api/auth/login", async (request, response) => {
   }
 });
 
-app.post("/api/auth/logout", (request, response) => {
+app.post(["/api/auth/reset-password", "/auth/reset-password"], async (request, response) => {
+  if (!ensureDatabase(response)) {
+    return;
+  }
+
+  const { email, newPassword } = request.body || {};
+
+  if (!email || !newPassword) {
+    response.status(400).json({ message: "Email and new password are required." });
+    return;
+  }
+
+  if (String(newPassword).length < 6) {
+    response.status(400).json({ message: "Password must be at least 6 characters long." });
+    return;
+  }
+
+  try {
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await dbGet("SELECT id FROM users WHERE email = ?", [normalizedEmail]);
+    if (!user) {
+      response.status(404).json({ message: "No account found with that email address. Please register first." });
+      return;
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await dbRun("UPDATE users SET password_hash = ? WHERE email = ?", [passwordHash, normalizedEmail]);
+
+    response.json({ ok: true, message: "Password updated successfully. You can now sign in." });
+  } catch (error) {
+    console.error("Password reset error:", error);
+    response.status(500).json({ message: "Could not reset password. Please try again." });
+  }
+});
+
+app.post(["/api/auth/logout", "/auth/logout"], (request, response) => {
   response.setHeader("Set-Cookie", clearSessionCookie(isVercel));
   response.json({ ok: true, message: "Logged out" });
 });
 
-app.get("/api/photos", async (request, response) => {
+app.get(["/api/photos", "/photos"], async (request, response) => {
   const currentUser = getCurrentUser(request);
   if (!currentUser) {
     response.status(401).json({ message: "Please sign in to view your gallery." });
