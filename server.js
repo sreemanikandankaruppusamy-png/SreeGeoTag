@@ -228,9 +228,15 @@ function dbAll(sql, params = []) {
 
 app.use(express.json({ limit: "15mb" }));
 app.use((request, response, next) => {
-  response.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = request.headers.origin;
+  if (origin) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Access-Control-Allow-Credentials", "true");
+  } else {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+  }
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
 
   if (request.method === "OPTIONS") {
     response.sendStatus(204);
@@ -328,7 +334,7 @@ app.post("/api/auth/register", async (request, response) => {
 
     const user = {
       id: String(createdUser.lastID),
-      name: trimmedName,
+      name: trimmedName || "User",
       email: normalizedEmail
     };
 
@@ -368,7 +374,7 @@ app.post("/api/auth/login", async (request, response) => {
 
     const safeUser = {
       id: String(user.id),
-      name: user.name,
+      name: user.name || "User",
       email: user.email
     };
 

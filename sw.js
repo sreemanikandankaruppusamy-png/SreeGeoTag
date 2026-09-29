@@ -1,4 +1,4 @@
-const CACHE_NAME = "sreegeo-v1";
+const CACHE_NAME = "sreegeo-v2";
 const APP_SHELL = [
   "/",
   "/main.html",
@@ -43,7 +43,9 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/") || request.method !== "GET") {
     event.respondWith(
       fetch(request).catch(() => {
-        return new Response(JSON.stringify({ error: "Offline - API unavailable" }), {
+        return new Response(JSON.stringify({ error: "Offline - API unavailable", message: "Server is offline or unreachable." }), {
+          status: 503,
+          statusText: "Service Unavailable",
           headers: { "Content-Type": "application/json" }
         });
       })

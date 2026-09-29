@@ -29,7 +29,8 @@ const themeToggleIcon = document.querySelector("#themeToggleIcon");
 const tabButtons = document.querySelectorAll(".tab-button");
 const views = document.querySelectorAll(".view");
 
-const apiBaseUrl = window.location.origin;
+const isDevPort = window.location.port && window.location.port !== "3000" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const apiBaseUrl = isDevPort ? "http://localhost:3000" : window.location.origin;
 const localPhotosKey = "geoTagCameraPhotos";
 const themeStorageKey = "sreegeoTheme";
 const authStatus = document.querySelector("#authStatus");
@@ -165,7 +166,12 @@ async function checkAuth() {
   const cachedUserRaw = localStorage.getItem("sreegeo_user");
   let cachedUser = null;
   try {
-    if (cachedUserRaw) cachedUser = JSON.parse(cachedUserRaw);
+    if (cachedUserRaw) {
+      const parsed = JSON.parse(cachedUserRaw);
+      if (parsed && typeof parsed === "object") {
+        cachedUser = parsed;
+      }
+    }
   } catch {}
 
   // Strictly enforce login: If on main page without token or cached user, kick back to login
@@ -198,8 +204,8 @@ async function checkAuth() {
       return;
     }
 
-    const data = await response.json();
-    if (data.authenticated && data.user) {
+    const data = await response.json().catch(() => null);
+    if (data?.authenticated && data?.user) {
       localStorage.setItem("sreegeo_user", JSON.stringify(data.user));
       if (data.token) {
         localStorage.setItem("sreegeo_token", data.token);
@@ -255,8 +261,12 @@ async function handleLogin(event) {
     );
 
     const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.message || "Login failed.");
+    if (!response.ok || !data) {
+      throw new Error(data?.message || data?.error || "Login failed.");
+    }
+
+    if (!data.user) {
+      throw new Error(data?.message || data?.error || "Authentication failed: No user returned.");
     }
 
     if (data.user) {
@@ -267,7 +277,8 @@ async function handleLogin(event) {
     }
 
     showAuthScreen(true, data.user);
-    authStatus.textContent = `Welcome back, ${data.user.name}! Redirecting...`;
+    const userName = data.user.name || "User";
+    authStatus.textContent = `Welcome back, ${userName}! Redirecting...`;
     window.location.replace("/main.html");
   } catch (error) {
     authStatus.textContent = error?.message || "Unable to sign in.";
@@ -294,8 +305,12 @@ async function handleRegister(event) {
     );
 
     const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.message || "Registration failed.");
+    if (!response.ok || !data) {
+      throw new Error(data?.message || data?.error || "Registration failed.");
+    }
+
+    if (!data.user) {
+      throw new Error(data?.message || data?.error || "Registration failed: No user returned.");
     }
 
     if (data.user) {
@@ -306,7 +321,8 @@ async function handleRegister(event) {
     }
 
     showAuthScreen(true, data.user);
-    authStatus.textContent = `Welcome, ${data.user.name}! Redirecting...`;
+    const userName = data.user.name || name || "User";
+    authStatus.textContent = `Welcome, ${userName}! Redirecting...`;
     window.location.replace("/main.html");
   } catch (error) {
     authStatus.textContent = error?.message || "Unable to create account.";
@@ -338,13 +354,14 @@ function showAuthScreen(authenticated, user = null) {
     appShell.hidden = !authenticated;
   }
 
+  const displayName = user?.name || "User";
   if (authenticated && user) {
     if (databaseStatus) {
-      databaseStatus.textContent = `Signed in as ${user.name}`;
+      databaseStatus.textContent = `Signed in as ${displayName}`;
     }
     if (welcomeBanner) {
       welcomeBanner.hidden = false;
-      welcomeBanner.textContent = `Welcome, ${user.name}! Your gallery is ready.`;
+      welcomeBanner.textContent = `Welcome, ${displayName}! Your gallery is ready.`;
     }
   } else {
     if (databaseStatus) {
@@ -1222,7 +1239,7 @@ async function fetchWithTimeout(url, options = {}, message) {
       signal: controller.signal
     });
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (error?.name === "AbortError") {
       throw new Error(message);
     }
 
