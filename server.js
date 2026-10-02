@@ -219,9 +219,9 @@ function dbAll(sql, params = []) {
   if (usingFallback || !db) {
     const lowerSql = sql.toLowerCase();
     if (lowerSql.includes("from photos")) {
-      const ownerId = String(params[0] || "");
+      const ownerId = params && params[0] ? String(params[0]) : "";
       const userPhotos = memStore.photos
-        .filter((p) => String(p.owner_id) === ownerId)
+        .filter((p) => !ownerId || String(p.owner_id) === ownerId)
         .sort((a, b) => b.id - a.id);
       return Promise.resolve(userPhotos);
     }
@@ -262,24 +262,17 @@ app.use(async (request, response, next) => {
   }
   next();
 });
-function sendLoginPage(request, response) {
-  if (getCurrentUser(request)) {
-    response.redirect("/main.html");
-    return;
-  }
-
+function sendAppPage(request, response) {
   response.sendFile(path.join(__dirname, "index.html"));
 }
 
-function sendMainPage(request, response) {
-  response.sendFile(path.join(__dirname, "main.html"));
-}
-
-app.get("/", sendLoginPage);
-app.get("/login", sendLoginPage);
-app.get("/index.html", sendLoginPage);
-app.get("/main", sendMainPage);
-app.get("/main.html", sendMainPage);
+app.get("/", sendAppPage);
+app.get("/login", (request, response) => {
+  response.redirect("/");
+});
+app.get("/index.html", sendAppPage);
+app.get("/main", sendAppPage);
+app.get("/main.html", sendAppPage);
 app.get("/sw.js", (request, response) => {
   response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   response.setHeader("Content-Type", "application/javascript");
@@ -446,21 +439,18 @@ app.post(["/api/auth/logout", "/auth/logout"], (request, response) => {
 });
 
 app.get(["/api/photos", "/photos"], async (request, response) => {
-  const currentUser = getCurrentUser(request);
-  if (!currentUser) {
-    response.status(401).json({ message: "Please sign in to view your gallery." });
-    return;
-  }
-
   if (!ensureDatabase(response)) {
     return;
   }
 
   try {
-    const photos = await dbAll(
-      "SELECT * FROM photos WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
-      [currentUser.id]
-    );
+    const currentUser = getCurrentUser(request);
+    const photos = currentUser
+      ? await dbAll(
+          "SELECT * FROM photos WHERE owner_id = ? ORDER BY created_at DESC LIMIT 100",
+          [currentUser.id]
+        )
+      : await dbAll("SELECT * FROM photos ORDER BY created_at DESC LIMIT 100");
 
     response.json(photos.map(toClientPhoto));
   } catch (error) {
@@ -479,14 +469,10 @@ app.post("/api/photos", async (request, response) => {
     const createdAt = photo.createdAt ? new Date(photo.createdAt) : new Date();
 
     const currentUser = getCurrentUser(request);
-
-    if (!currentUser) {
-      response.status(401).json({ message: "Please sign in before saving photos." });
-      return;
-    }
+    const ownerId = currentUser ? String(currentUser.id) : "guest";
 
     const document = {
-      owner_id: currentUser.id,
+      owner_id: ownerId,
       original_id: photo.id || crypto.randomUUID(),
       image_url: savedImage.publicUrl,
       image_file: savedImage.fileName,
@@ -538,23 +524,18 @@ app.delete("/api/photos/:id", async (request, response) => {
 
   try {
     const currentUser = getCurrentUser(request);
-    if (!currentUser) {
-      response.status(401).json({ message: "Please sign in before deleting photos." });
-      return;
-    }
-
     const id = request.params.id;
     const photo = /^\d+$/.test(id)
       ? await dbGet("SELECT * FROM photos WHERE id = ?", [Number(id)])
       : await dbGet("SELECT * FROM photos WHERE original_id = ?", [id]);
 
-    if (photo?.owner_id && photo.owner_id !== currentUser.id) {
-      response.status(403).json({ message: "You can only delete your own photos." });
+    if (!photo) {
+      response.status(404).json({ message: "Photo not found." });
       return;
     }
 
-    if (!photo) {
-      response.status(404).json({ message: "Photo not found." });
+    if (currentUser && photo?.owner_id && photo.owner_id !== currentUser.id && photo.owner_id !== "guest") {
+      response.status(403).json({ message: "You can only delete your own photos." });
       return;
     }
 

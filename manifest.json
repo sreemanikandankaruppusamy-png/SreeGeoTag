@@ -2,7 +2,7 @@
   "name": "SreeGeo GeoTag Camera",
   "short_name": "SreeGeo",
   "description": "Mobile Geo Tag Camera with precise GPS coordinates, address stamping, and photo gallery.",
-  "start_url": "/main.html",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
@@ -28,7 +28,7 @@
   "shortcuts": [
     {
       "name": "Open Camera",
-      "url": "/main.html",
+      "url": "/",
       "description": "Open live camera to capture geo-tagged photos"
     }
   ]
